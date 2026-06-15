@@ -25,7 +25,7 @@ pub(crate) struct PreparedChunk {
 /// Build a content chunk from `data`, then stamp it for the given batch.
 ///
 /// The stamp's bucket is derived from the chunk address (top `bucket_depth`
-/// bits) and the index is the next free slot in that bucket — handled by
+/// bits) and the index is the next free slot in that bucket - handled by
 /// [`MemoryIssuer`] inside [`BatchStamper`], so we never hardcode `(0, 0)`.
 pub(crate) fn prepare_content_chunk(
     data: Vec<u8>,

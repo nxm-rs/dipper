@@ -25,7 +25,7 @@ Phase 3 (planned): mantaray manifests and multi-chunk file upload/download.
 - `src/cli.rs` is the clap derive surface; `src/rpc.rs` builds the tonic channel and clients; `src/proto.rs` re-exports the generated gRPC modules.
 - `src/wallet.rs` loads a signer from a raw key or an EIP-2335 keystore; `src/chunkops.rs` builds and stamps a content chunk locally via nectar.
 - `proto/` holds the protobuf definitions, vendored from `vertex`. Keep them in sync with the node's published API; do not diverge the wire shape.
-- `nectar` is consumed via `../nectar` path dependencies. A standalone checkout therefore needs `nectar` checked out as a sibling directory; CI checks out both repos side by side.
+- `nectar` is consumed from crates.io (pinned at `0.2.1` or later, the first release with the corrected contract addresses). dipper builds standalone from a plain clone; there is no sibling-checkout requirement.
 
 ## Repo boundary
 

@@ -12,7 +12,7 @@ use crate::proto::node::node_client::NodeClient;
 /// Establish a channel to the vertex node's gRPC endpoint.
 ///
 /// The channel connects lazily on first use, so this does not fail fast if the
-/// node is down — the first RPC call surfaces a connection error instead.
+/// node is down - the first RPC call surfaces a connection error instead.
 pub(crate) async fn connect(endpoint: &str) -> Result<Channel> {
     let channel = Endpoint::from_shared(endpoint.to_string())
         .with_context(|| format!("invalid endpoint URL: {endpoint}"))?

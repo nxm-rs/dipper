@@ -60,7 +60,7 @@ sol! {
             uint256 lastUpdatedBlockNumber
         );
 
-        // events — field order MUST match the contract.
+        // events - field order MUST match the contract.
         event BatchCreated(
             bytes32 indexed batchId,
             uint256 totalAmount,
@@ -236,7 +236,7 @@ async fn ensure_allowance<P: Provider>(
     Ok(())
 }
 
-/// `dipper batch create` — BZZ.approve then PostageStamp.createBatch.
+/// `dipper batch create` - BZZ.approve then PostageStamp.createBatch.
 ///
 /// Reads the authoritative batch id from the `BatchCreated` receipt log and
 /// prints it (0x-prefixed) on success, alongside the locally computed id for
@@ -324,7 +324,7 @@ pub(crate) async fn create(
     Ok(())
 }
 
-/// `dipper batch topup` — PostageStamp.topUp(batchId, amountPerChunk).
+/// `dipper batch topup` - PostageStamp.topUp(batchId, amountPerChunk).
 ///
 /// The BZZ cost is `amountPerChunk * 2^depth`, using the batch's *stored* depth
 /// (read on-chain), not any CLI value.
@@ -391,7 +391,7 @@ pub(crate) async fn topup(
     Ok(())
 }
 
-/// `dipper batch dilute` — PostageStamp.increaseDepth(batchId, newDepth).
+/// `dipper batch dilute` - PostageStamp.increaseDepth(batchId, newDepth).
 ///
 /// No BZZ is transferred (no approve), only the depth is raised.
 pub(crate) async fn dilute(
@@ -434,7 +434,7 @@ pub(crate) async fn dilute(
     Ok(())
 }
 
-/// `dipper batch info` — read-only batch state (no signer required).
+/// `dipper batch info` - read-only batch state (no signer required).
 pub(crate) async fn info(rpc_url: &str, network: Network, batch_id: &str) -> Result<()> {
     let addrs = addrs_for(network);
     let batch_id = parse_b256(batch_id, "batch id")?;

@@ -5,7 +5,7 @@
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-/// dipper — a cast-like CLI for Ethereum Swarm over a vertex node's gRPC API.
+/// dipper - a cast-like CLI for Ethereum Swarm over a vertex node's gRPC API.
 #[derive(Debug, Parser)]
 #[command(name = "dipper", version, about, long_about = None)]
 pub(crate) struct Cli {

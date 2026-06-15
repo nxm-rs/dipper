@@ -11,7 +11,7 @@ use crate::proto::chunk::{ChunkType, RetrieveChunkRequest, UploadChunkRequest};
 use crate::rpc;
 use crate::wallet;
 
-/// `dipper chunk download <addr>` — retrieve a chunk and write it out.
+/// `dipper chunk download <addr>` - retrieve a chunk and write it out.
 ///
 /// By default the payload (wire body minus the 8-byte span) is written; with
 /// `--raw` the verbatim wire body is written instead.
@@ -52,7 +52,7 @@ pub(crate) async fn download(
     Ok(())
 }
 
-/// `dipper chunk upload [<file>|--stdin] ...` — build, stamp, and push a chunk.
+/// `dipper chunk upload [<file>|--stdin] ...` - build, stamp, and push a chunk.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upload(
     endpoint: &str,
