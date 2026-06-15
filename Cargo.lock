@@ -2762,7 +2762,9 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
 name = "nectar-contracts"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eda0308e454f71c7349e039aca5e3657947d971c2d0bce77d090c42d785a6588"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -2771,7 +2773,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-mantaray"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45b79b0462dfd53da1aedac064c0abff4579f5226885d6ccc24f5b99625b6577"
 dependencies = [
  "alloy-primitives",
  "bitflags",
@@ -2784,7 +2788,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-postage"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc43dc3955c81031185d40d15ba6c421db8292f5942733b9464bdbac78e17bf9"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2798,7 +2804,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-postage-issuer"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3decbd25c452ab3df4740160655b5b37a7aa2448c29153a604e4bb6c25726ded"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2810,7 +2818,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-primitives"
-version = "0.2.0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a95af57daaa42eed425fd993b104f18d9bcb0942677af2afed79f7ba980b4682"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",

@@ -42,19 +42,18 @@ thiserror = "2"
 hex = "0.4"
 rpassword = "7"
 
-# Local nectar crates (edition-2024, compile fine as deps). The `local-signer`
+# nectar crates from crates.io. 0.2.1 is the first release carrying the corrected
+# Gnosis/Sepolia contract addresses, so pin at least that. The `local-signer`
 # feature pulls in the `BatchStamper`/`MemoryIssuer` signing path used for upload.
-nectar-primitives = { path = "../nectar/crates/primitives" }
-nectar-postage = { path = "../nectar/crates/postage" }
-nectar-postage-issuer = { path = "../nectar/crates/postage-issuer", features = [
-    "local-signer",
-] }
+nectar-primitives = "0.2.1"
+nectar-postage = "0.2.1"
+nectar-postage-issuer = { version = "0.2.1", features = ["local-signer"] }
 # Mantaray manifest (phase 3): plain (non-encrypted) manifests over a chunk
 # store; default features only (no `encryption`).
-nectar-mantaray = { path = "../nectar/crates/mantaray" }
+nectar-mantaray = "0.2.1"
 # Contract address book + reusable IERC20 interface (phase 2). Its
 # IPostageStamp is read-only, so dipper declares its own write interface.
-nectar-contracts = { path = "../nectar/crates/contracts" }
+nectar-contracts = "0.2.1"
 
 # alloy - versions pinned to match nectar's workspace so Signature/Address/B256
 # types unify across nectar's public API. The "keystore" feature on

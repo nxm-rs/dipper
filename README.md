@@ -16,11 +16,10 @@ Looking for the org overview? See **[github.com/nxm-rs](https://github.com/nxm-r
 
 ## Install
 
-Build from source. `dipper` consumes `nectar` through `../nectar` path
-dependencies, so check both repos out as siblings:
+Build from source. `dipper` depends on the published [`nectar`](https://crates.io/crates/nectar-primitives)
+crates, so a plain clone builds on its own:
 
 ```bash
-git clone https://github.com/nxm-rs/nectar
 git clone https://github.com/nxm-rs/dipper
 cd dipper
 ```
