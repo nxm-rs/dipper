@@ -7,22 +7,22 @@
 //!
 //! `nectar_contracts::IPostageStamp` is read-only, so dipper declares its own
 //! write surface below and reuses `nectar_contracts::IERC20` for token approval.
-//!
-//! Scaffold note: the `sol!` interface, address book, and amount constant are
-//! integration plumbing the batch-ops impl consumes. They are allowed-dead here
-//! so the stub compiles clippy-clean; the impl phase wires them and this
-//! module-level allow is removed.
-#![allow(dead_code)]
 
-use alloy_sol_types::sol;
-use anyhow::{Result, bail};
+use alloy_contract::CallBuilder;
+use alloy_primitives::{
+    Address, B256, U256, keccak256,
+    utils::{ParseUnits, Unit},
+};
+use alloy_provider::{Provider, ProviderBuilder};
+use alloy_signer_local::PrivateKeySigner;
+use alloy_sol_types::{SolValue, sol};
+use anyhow::{Context, Result, bail};
 
 use crate::cli::{Network, SignerArgs};
+use crate::wallet;
 
 // Reuse nectar's complete ERC-20 interface (approve/allowance/balanceOf/
-// decimals) rather than redeclaring it. Re-exported as plumbing for the impl
-// agent; allowed-unused until the bodies below drive it.
-#[allow(unused_imports)]
+// decimals) rather than redeclaring it.
 pub(crate) use nectar_contracts::IERC20;
 
 sol! {
@@ -81,9 +81,9 @@ pub(crate) const BZZ_DECIMALS: u8 = 16;
 /// Resolved contract addresses and expected chain id for a network.
 pub(crate) struct ChainAddrs {
     /// PostageStamp contract address.
-    pub(crate) postage: alloy_primitives::Address,
+    pub(crate) postage: Address,
     /// BZZ ERC-20 token address.
-    pub(crate) bzz: alloy_primitives::Address,
+    pub(crate) bzz: Address,
     /// Expected EVM chain id (100 Gnosis, 11155111 Sepolia).
     pub(crate) chain_id: u64,
 }
@@ -105,48 +105,370 @@ pub(crate) const fn addrs_for(net: Network) -> ChainAddrs {
     }
 }
 
+/// The BZZ unit (16 decimals) used for parsing/formatting human amounts.
+const fn bzz_unit() -> Unit {
+    // 16 is well within the valid 0..=77 range, so this never fails.
+    Unit::new(BZZ_DECIMALS).expect("BZZ_DECIMALS (16) is a valid unit")
+}
+
+/// Parse a human BZZ amount (decimal string, 16-decimal) into base units.
+fn parse_bzz(amount: &str) -> Result<U256> {
+    Ok(ParseUnits::parse_units(amount, bzz_unit())
+        .with_context(|| format!("invalid BZZ amount: {amount}"))?
+        .into())
+}
+
+/// Format a base-unit BZZ value as a human decimal string.
+fn format_bzz(value: U256) -> String {
+    ParseUnits::from(value).format_units(bzz_unit())
+}
+
+/// Parse a 32-byte hex value (0x-prefix optional) into a [`B256`].
+fn parse_b256(s: &str, what: &str) -> Result<B256> {
+    let raw = s.strip_prefix("0x").unwrap_or(s);
+    let bytes = hex::decode(raw).with_context(|| format!("{what} is not valid hex"))?;
+    if bytes.len() != 32 {
+        bail!(
+            "{what} must be 32 bytes (64 hex chars), got {}",
+            bytes.len()
+        );
+    }
+    Ok(B256::from_slice(&bytes))
+}
+
+/// Total BZZ a batch costs at creation / top-up: `perChunk * 2^depth`.
+///
+/// The contract computes `_initialBalancePerChunk * (1 << _depth)`; the
+/// `bucketDepth` never enters the cost, it only constrains validity.
+fn total_amount(per_chunk: U256, depth: u8) -> U256 {
+    per_chunk * (U256::from(1u8) << depth)
+}
+
+/// Build a signed provider from `rpc_url` + the wallet, and verify the chain id
+/// matches the selected network.
+async fn signed_provider(
+    rpc_url: &str,
+    addrs: &ChainAddrs,
+    signer: PrivateKeySigner,
+) -> Result<impl Provider> {
+    let provider = ProviderBuilder::new()
+        .wallet(signer)
+        .connect(rpc_url)
+        .await
+        .with_context(|| format!("failed to connect to RPC at {rpc_url}"))?;
+    verify_chain_id(&provider, addrs).await?;
+    Ok(provider)
+}
+
+/// Build a read-only provider (no wallet) and verify the chain id.
+async fn read_provider(rpc_url: &str, addrs: &ChainAddrs) -> Result<impl Provider> {
+    let provider = ProviderBuilder::new()
+        .connect(rpc_url)
+        .await
+        .with_context(|| format!("failed to connect to RPC at {rpc_url}"))?;
+    verify_chain_id(&provider, addrs).await?;
+    Ok(provider)
+}
+
+/// Bail if the connected chain id is not the one the `--network` flag selected.
+async fn verify_chain_id<P: Provider>(provider: &P, addrs: &ChainAddrs) -> Result<()> {
+    let connected = provider
+        .get_chain_id()
+        .await
+        .context("failed to query RPC chain id")?;
+    if connected != addrs.chain_id {
+        bail!(
+            "RPC chain id {connected} does not match the selected network (expected {})",
+            addrs.chain_id
+        );
+    }
+    Ok(())
+}
+
+/// Ensure `owner` has approved at least `amount` BZZ to the PostageStamp
+/// contract, sending an `approve` only when the current allowance is short.
+async fn ensure_allowance<P: Provider>(
+    provider: &P,
+    addrs: &ChainAddrs,
+    owner: Address,
+    amount: U256,
+) -> Result<()> {
+    let current = CallBuilder::new_sol(
+        provider,
+        &addrs.bzz,
+        &IERC20::allowanceCall {
+            owner,
+            spender: addrs.postage,
+        },
+    )
+    .call()
+    .await
+    .context("failed to read BZZ allowance")?;
+
+    if current >= amount {
+        println!("Allowance already sufficient ({} BZZ)", format_bzz(current));
+        return Ok(());
+    }
+
+    println!("Approving {} BZZ to PostageStamp...", format_bzz(amount));
+    let receipt = CallBuilder::new_sol(
+        provider,
+        &addrs.bzz,
+        &IERC20::approveCall {
+            spender: addrs.postage,
+            amount,
+        },
+    )
+    .send()
+    .await
+    .context("approve transaction failed to send")?
+    .get_receipt()
+    .await
+    .context("approve transaction failed to confirm")?;
+
+    if !receipt.status() {
+        bail!(
+            "approve transaction reverted (tx {:#x})",
+            receipt.transaction_hash
+        );
+    }
+    println!("  approve tx: {:#x}", receipt.transaction_hash);
+    Ok(())
+}
+
 /// `dipper batch create` — BZZ.approve then PostageStamp.createBatch.
 ///
 /// Reads the authoritative batch id from the `BatchCreated` receipt log and
-/// prints it (0x-prefixed) on success.
+/// prints it (0x-prefixed) on success, alongside the locally computed id for
+/// cross-check.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create(
-    _rpc_url: &str,
-    _network: Network,
-    _amount: &str,
-    _depth: u8,
-    _bucket_depth: u8,
-    _immutable: bool,
-    _owner: Option<&str>,
-    _nonce: Option<&str>,
-    _signer: &SignerArgs,
+    rpc_url: &str,
+    network: Network,
+    amount: &str,
+    depth: u8,
+    bucket_depth: u8,
+    immutable: bool,
+    owner: Option<&str>,
+    nonce: Option<&str>,
+    signer_args: &SignerArgs,
 ) -> Result<()> {
-    bail!("batch create: not implemented")
+    let addrs = addrs_for(network);
+    let signer = wallet::load_signer(signer_args)?;
+    let sender = signer.address();
+
+    let owner = match owner {
+        Some(s) => s.parse::<Address>().context("invalid owner address")?,
+        None => sender,
+    };
+    let nonce = match nonce {
+        Some(s) => parse_b256(s, "nonce")?,
+        None => B256::random(),
+    };
+
+    let per_chunk = parse_bzz(amount)?;
+    let total = total_amount(per_chunk, depth);
+
+    let provider = signed_provider(rpc_url, &addrs, signer).await?;
+
+    // BZZ.transferFrom inside createBatch needs an allowance for `total`.
+    ensure_allowance(&provider, &addrs, sender, total).await?;
+
+    println!(
+        "Creating batch: {} BZZ/chunk, depth {depth}, bucket depth {bucket_depth}, total {} BZZ",
+        format_bzz(per_chunk),
+        format_bzz(total),
+    );
+    let receipt = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::createBatchCall {
+            _owner: owner,
+            _initialBalancePerChunk: per_chunk,
+            _depth: depth,
+            _bucketDepth: bucket_depth,
+            _nonce: nonce,
+            _immutable: immutable,
+        },
+    )
+    .send()
+    .await
+    .context("createBatch transaction failed to send")?
+    .get_receipt()
+    .await
+    .context("createBatch transaction failed to confirm")?;
+
+    if !receipt.status() {
+        bail!(
+            "createBatch transaction reverted (tx {:#x})",
+            receipt.transaction_hash
+        );
+    }
+
+    // batchId = keccak256(abi.encode(msg.sender, nonce)); read the authoritative
+    // value from the BatchCreated log and verify it against the local compute.
+    let local_id = keccak256((sender, nonce).abi_encode());
+    let batch_id = receipt
+        .logs()
+        .iter()
+        .find_map(|log| log.log_decode::<IPostageStampWrite::BatchCreated>().ok())
+        .map(|log| log.inner.data.batchId)
+        .context("BatchCreated event not found in transaction receipt")?;
+
+    println!("Batch created");
+    println!("  tx hash:  {:#x}", receipt.transaction_hash);
+    println!("  batch id: {batch_id:#x}");
+    if batch_id != local_id {
+        println!("  warning: locally computed id {local_id:#x} differs from on-chain id");
+    }
+    Ok(())
 }
 
 /// `dipper batch topup` — PostageStamp.topUp(batchId, amountPerChunk).
+///
+/// The BZZ cost is `amountPerChunk * 2^depth`, using the batch's *stored* depth
+/// (read on-chain), not any CLI value.
 pub(crate) async fn topup(
-    _rpc_url: &str,
-    _network: Network,
-    _batch_id: &str,
-    _amount: &str,
-    _signer: &SignerArgs,
+    rpc_url: &str,
+    network: Network,
+    batch_id: &str,
+    amount: &str,
+    signer_args: &SignerArgs,
 ) -> Result<()> {
-    bail!("batch topup: not implemented")
+    let addrs = addrs_for(network);
+    let signer = wallet::load_signer(signer_args)?;
+    let sender = signer.address();
+    let batch_id = parse_b256(batch_id, "batch id")?;
+    let per_chunk = parse_bzz(amount)?;
+
+    let provider = signed_provider(rpc_url, &addrs, signer).await?;
+
+    // The cost multiplier is the batch's stored depth, not the bucket depth.
+    let batch = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::batchesCall { _batchId: batch_id },
+    )
+    .call()
+    .await
+    .context("failed to read batch state")?;
+    if batch.owner == Address::ZERO {
+        bail!("batch {batch_id:#x} does not exist");
+    }
+    let total = total_amount(per_chunk, batch.depth);
+
+    ensure_allowance(&provider, &addrs, sender, total).await?;
+
+    println!(
+        "Topping up batch {batch_id:#x}: {} BZZ/chunk, depth {}, total {} BZZ",
+        format_bzz(per_chunk),
+        batch.depth,
+        format_bzz(total),
+    );
+    let receipt = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::topUpCall {
+            _batchId: batch_id,
+            _topupAmountPerChunk: per_chunk,
+        },
+    )
+    .send()
+    .await
+    .context("topUp transaction failed to send")?
+    .get_receipt()
+    .await
+    .context("topUp transaction failed to confirm")?;
+
+    if !receipt.status() {
+        bail!(
+            "topUp transaction reverted (tx {:#x})",
+            receipt.transaction_hash
+        );
+    }
+    println!("Batch topped up");
+    println!("  tx hash: {:#x}", receipt.transaction_hash);
+    Ok(())
 }
 
 /// `dipper batch dilute` — PostageStamp.increaseDepth(batchId, newDepth).
+///
+/// No BZZ is transferred (no approve), only the depth is raised.
 pub(crate) async fn dilute(
-    _rpc_url: &str,
-    _network: Network,
-    _batch_id: &str,
-    _depth: u8,
-    _signer: &SignerArgs,
+    rpc_url: &str,
+    network: Network,
+    batch_id: &str,
+    depth: u8,
+    signer_args: &SignerArgs,
 ) -> Result<()> {
-    bail!("batch dilute: not implemented")
+    let addrs = addrs_for(network);
+    let signer = wallet::load_signer(signer_args)?;
+    let batch_id = parse_b256(batch_id, "batch id")?;
+
+    let provider = signed_provider(rpc_url, &addrs, signer).await?;
+
+    println!("Increasing depth of batch {batch_id:#x} to {depth}...");
+    let receipt = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::increaseDepthCall {
+            _batchId: batch_id,
+            _newDepth: depth,
+        },
+    )
+    .send()
+    .await
+    .context("increaseDepth transaction failed to send")?
+    .get_receipt()
+    .await
+    .context("increaseDepth transaction failed to confirm")?;
+
+    if !receipt.status() {
+        bail!(
+            "increaseDepth transaction reverted (tx {:#x})",
+            receipt.transaction_hash
+        );
+    }
+    println!("Batch diluted");
+    println!("  tx hash: {:#x}", receipt.transaction_hash);
+    Ok(())
 }
 
 /// `dipper batch info` — read-only batch state (no signer required).
-pub(crate) async fn info(_rpc_url: &str, _network: Network, _batch_id: &str) -> Result<()> {
-    bail!("batch info: not implemented")
+pub(crate) async fn info(rpc_url: &str, network: Network, batch_id: &str) -> Result<()> {
+    let addrs = addrs_for(network);
+    let batch_id = parse_b256(batch_id, "batch id")?;
+
+    let provider = read_provider(rpc_url, &addrs).await?;
+
+    let batch = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::batchesCall { _batchId: batch_id },
+    )
+    .call()
+    .await
+    .context("failed to read batch state")?;
+
+    if batch.owner == Address::ZERO {
+        bail!("batch {batch_id:#x} does not exist");
+    }
+
+    let remaining = CallBuilder::new_sol(
+        &provider,
+        &addrs.postage,
+        &IPostageStampWrite::remainingBalanceCall { _batchId: batch_id },
+    )
+    .call()
+    .await
+    .context("failed to read remaining balance")?;
+
+    println!("Batch {batch_id:#x}");
+    println!("  owner:             {:#x}", batch.owner);
+    println!("  depth:             {}", batch.depth);
+    println!("  bucket depth:      {}", batch.bucketDepth);
+    println!("  immutable:         {}", batch.immutableFlag);
+    println!("  remaining/chunk:   {} BZZ", format_bzz(remaining));
+    println!("  last updated block: {}", batch.lastUpdatedBlockNumber);
+    Ok(())
 }
