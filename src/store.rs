@@ -11,21 +11,29 @@
 //! wire body and reconstructs + verifies a `ContentChunk`. Both bridge their
 //! async RPC over a captured `tokio::runtime::Handle`.
 //!
-//! Scaffold note: the store type and its constructors are integration plumbing
-//! the upload/download impl consumes. They are allowed-dead here so the stub
-//! compiles clippy-clean; the impl phase wires them and this module-level allow
-//! is removed.
-#![allow(dead_code)]
+//! ## Sync → async bridging
+//!
+//! The `SyncChunkGet`/`SyncChunkPut` methods are synchronous, yet the tonic
+//! client is async. They are also invoked from the parallel splitter / mantaray
+//! worker threads. Each method therefore drives its RPC with
+//! [`tokio::task::block_in_place`] plus the captured [`Handle::block_on`], which
+//! is the standard pattern for a sync method that must await inside a
+//! multi-thread tokio runtime. The callers in `manifest.rs` additionally wrap
+//! the CPU-bound split/manifest work in `spawn_blocking` so the BMT hashing
+//! runs off the async workers.
 
 use std::sync::{Arc, Mutex};
 
 use alloy_signer_local::PrivateKeySigner;
+use nectar_postage_issuer::{BatchStamper, MemoryIssuer, Stamper};
 use nectar_primitives::{
-    AnyChunk, ChunkAddress, DEFAULT_BODY_SIZE,
+    AnyChunk, ChunkAddress, ContentChunk, DEFAULT_BODY_SIZE,
     store::{SyncChunkGet, SyncChunkHas, SyncChunkPut},
 };
 
-use crate::proto::chunk::chunk_client::ChunkClient;
+use crate::proto::chunk::{
+    ChunkType, HasChunkRequest, RetrieveChunkRequest, UploadChunkRequest, chunk_client::ChunkClient,
+};
 use tonic::transport::Channel;
 
 /// Chunk body size used everywhere in dipper (4096 bytes).
@@ -70,9 +78,6 @@ pub(crate) struct GrpcStoreInner {
     pub(crate) validate: bool,
 }
 
-// The concrete stamper + issuer types live in nectar-postage-issuer.
-use nectar_postage_issuer::{BatchStamper, MemoryIssuer};
-
 /// gRPC-backed chunk store. `Clone` is cheap (shares one [`GrpcStoreInner`]).
 #[derive(Clone)]
 pub(crate) struct GrpcStore {
@@ -105,9 +110,8 @@ impl GrpcStore {
 
     /// Build a read-only store (no stamping/upload) for `ls`/`download`.
     ///
-    /// The stamper is unused on the read path; the impl agent may restructure
-    /// to avoid requiring a signer for reads (e.g. an `Option<stamper>`), but
-    /// the public read methods are `get`/`has` via the trait impls below.
+    /// The stamper is present but unused on the read path; `get`/`has` never
+    /// touch it. A dummy zero batch is fine because reads do not stamp.
     pub(crate) fn connect_read_only(
         chunk_client: ChunkClient<Channel>,
         signer: PrivateKeySigner,
@@ -123,26 +127,104 @@ impl GrpcStore {
             false,
         )
     }
+
+    /// Drive an async future to completion from a sync context.
+    ///
+    /// `block_in_place` parks the current multi-thread worker so it can block,
+    /// then the captured handle drives the future. This is safe because dipper
+    /// uses the default multi-thread `#[tokio::main]` runtime and the callers
+    /// invoke the splitter/manifest from `spawn_blocking`.
+    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        let handle = self.inner.handle.clone();
+        tokio::task::block_in_place(move || handle.block_on(fut))
+    }
 }
 
 impl SyncChunkGet<BS> for GrpcStore {
     type Error = GrpcStoreError;
 
-    fn get(&self, _address: &ChunkAddress) -> Result<AnyChunk<BS>, Self::Error> {
-        todo!("retrieve_chunk RPC -> ContentChunk::try_from(body) -> verify -> AnyChunk")
+    fn get(&self, address: &ChunkAddress) -> Result<AnyChunk<BS>, Self::Error> {
+        let address_hex = hex::encode(address.as_bytes());
+        let mut client = self.inner.chunk_client.clone();
+
+        let resp = self
+            .block_on(async move {
+                client
+                    .retrieve_chunk(RetrieveChunkRequest {
+                        address: address_hex,
+                    })
+                    .await
+            })?
+            .into_inner();
+
+        if resp.data.is_empty() {
+            return Err(GrpcStoreError::NotFound(hex::encode(address.as_bytes())));
+        }
+
+        // The wire body (span || payload) is exactly what ContentChunk consumes.
+        let bytes = nectar_primitives::bytes::Bytes::from(resp.data);
+        let chunk = ContentChunk::<BS>::try_from(bytes)?;
+        let chunk: AnyChunk<BS> = chunk.into();
+
+        // Reject tampered data: the BMT address must match what we asked for.
+        chunk.verify(address)?;
+        Ok(chunk)
     }
 }
 
 impl SyncChunkPut<BS> for GrpcStore {
     type Error = GrpcStoreError;
 
-    fn put(&self, _chunk: AnyChunk<BS>) -> Result<(), Self::Error> {
-        todo!("stamp(address) -> upload_chunk RPC with wire body span||payload")
+    fn put(&self, chunk: AnyChunk<BS>) -> Result<(), Self::Error> {
+        let address = *chunk.address();
+
+        // Stamp the chunk; the shared issuer assigns the next free per-bucket
+        // index for this address.
+        let stamp = {
+            let mut stamper = self
+                .inner
+                .stamper
+                .lock()
+                .map_err(|e| GrpcStoreError::Stamp(format!("stamper mutex poisoned: {e}")))?;
+            stamper
+                .stamp(&address)
+                .map_err(|e| GrpcStoreError::Stamp(e.to_string()))?
+        };
+
+        // The wire body (span || payload) goes into UploadChunkRequest.data.
+        let body = chunk.into_bytes().to_vec();
+        let request = UploadChunkRequest {
+            data: body,
+            stamp: stamp.to_bytes().to_vec(),
+            address: hex::encode(address.as_bytes()),
+            chunk_type: ChunkType::Content as i32,
+            validate: self.inner.validate,
+        };
+
+        let mut client = self.inner.chunk_client.clone();
+        self.block_on(async move { client.upload_chunk(request).await })?;
+        Ok(())
     }
 }
 
 impl SyncChunkHas<BS> for GrpcStore {
-    fn has(&self, _address: &ChunkAddress) -> bool {
-        todo!("has_chunk RPC; log+swallow transport errors, return false")
+    fn has(&self, address: &ChunkAddress) -> bool {
+        let address_hex = hex::encode(address.as_bytes());
+        let mut client = self.inner.chunk_client.clone();
+
+        // `has` has no error channel; log and swallow transport failures.
+        match self.block_on(async move {
+            client
+                .has_chunk(HasChunkRequest {
+                    address: address_hex,
+                })
+                .await
+        }) {
+            Ok(resp) => resp.into_inner().exists,
+            Err(status) => {
+                eprintln!("has_chunk RPC failed: {status}");
+                false
+            }
+        }
     }
 }
