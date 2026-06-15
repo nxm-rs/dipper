@@ -27,6 +27,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           path: dipper
+      # `cargo fmt` runs `cargo metadata`, which resolves the `../nectar` path
+      # dependencies, so the sibling checkout is required even though no build
+      # happens here.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          repository: nxm-rs/nectar
+          path: nectar
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           components: rustfmt
@@ -106,9 +113,11 @@ jobs:
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b  # v3.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Run doctests
+      - name: Build docs
         working-directory: dipper
-        run: cargo test --doc --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
 
   ci-success:
     name: ci success

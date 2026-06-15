@@ -16,7 +16,8 @@
 //! The `SyncChunkGet`/`SyncChunkPut` methods are synchronous, yet the tonic
 //! client is async. They are also invoked from the parallel splitter / mantaray
 //! worker threads. Each method therefore drives its RPC with
-//! [`tokio::task::block_in_place`] plus the captured [`Handle::block_on`], which
+//! [`tokio::task::block_in_place`] plus the captured
+//! [`tokio::runtime::Handle::block_on`], which
 //! is the standard pattern for a sync method that must await inside a
 //! multi-thread tokio runtime. The callers in `manifest.rs` additionally wrap
 //! the CPU-bound split/manifest work in `spawn_blocking` so the BMT hashing

@@ -11,18 +11,18 @@
 
 /// `vertex.swarm.chunk.v1` — chunk retrieval and upload.
 pub(crate) mod chunk {
-    #![allow(unreachable_pub, clippy::missing_const_for_fn)]
+    #![allow(unreachable_pub, clippy::missing_const_for_fn, rustdoc::bare_urls)]
     tonic::include_proto!("vertex.swarm.chunk.v1");
 }
 
 /// `vertex.swarm.node.v1` — node status and topology.
 pub(crate) mod node {
-    #![allow(unreachable_pub, clippy::missing_const_for_fn)]
+    #![allow(unreachable_pub, clippy::missing_const_for_fn, rustdoc::bare_urls)]
     tonic::include_proto!("vertex.swarm.node.v1");
 }
 
 /// `vertex.health.v1` — gRPC health checking (reserved for later phases).
 pub(crate) mod health {
-    #![allow(unreachable_pub, clippy::missing_const_for_fn)]
+    #![allow(unreachable_pub, clippy::missing_const_for_fn, rustdoc::bare_urls)]
     tonic::include_proto!("vertex.health.v1");
 }

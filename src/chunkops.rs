@@ -1,7 +1,8 @@
 //! Content-chunk construction, stamping, and address/hex helpers.
 //!
 //! This is the local half of an upload: take raw bytes, build a nectar
-//! [`ContentChunk`], derive its address and BMT wire body (span + data), and
+//! [`ContentChunk`](nectar_primitives::ContentChunk), derive its address and BMT
+//! wire body (span + data), and
 //! produce a correctly-bucketed 113-byte postage stamp via the postage issuer.
 
 use alloy_primitives::B256;
