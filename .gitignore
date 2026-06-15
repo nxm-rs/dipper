@@ -1,0 +1,18 @@
+target/
+**/*.rs.bk
+*.tar.gz
+.env
+
+# Nix
+.direnv/
+
+# Editors
+.zed/
+
+# Agent / local worktrees (created under these paths; never tracked)
+.claude/
+.worktrees/
+
+# Workflow scratch directories
+/.dipper-work-*
+/.dipper-handoff/

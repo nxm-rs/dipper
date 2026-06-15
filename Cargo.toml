@@ -1,0 +1,64 @@
+[package]
+name = "dipper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Nexum Contributors"]
+description = "A cast-like CLI for Ethereum Swarm, talking to a vertex node over gRPC"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/nxm-rs/dipper"
+homepage = "https://github.com/nxm-rs/dipper"
+
+# Single-crate repo: the root package is its own workspace so it can carry the
+# shared lint posture used across the nxm-rs repos.
+[workspace]
+
+[workspace.lints.rust]
+unreachable-pub = "warn"
+unused-must-use = "deny"
+rust-2018-idioms = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+missing-const-for-fn = "warn"
+use-self = "warn"
+option-if-let-else = "warn"
+redundant-clone = "warn"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dipper"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tonic = "0.12"
+prost = "0.13"
+anyhow = "1"
+hex = "0.4"
+rpassword = "7"
+
+# Local nectar crates (edition-2024, compile fine as deps). The `local-signer`
+# feature pulls in the `BatchStamper`/`MemoryIssuer` signing path used for upload.
+nectar-primitives = { path = "../nectar/crates/primitives" }
+nectar-postage = { path = "../nectar/crates/postage" }
+nectar-postage-issuer = { path = "../nectar/crates/postage-issuer", features = [
+    "local-signer",
+] }
+
+# alloy — versions pinned to match nectar's workspace so Signature/Address/B256
+# types unify across nectar's public API. The "keystore" feature on
+# alloy-signer-local enables PrivateKeySigner::decrypt_keystore for cast /
+# EIP-2335 JSON keystores.
+alloy-primitives = "1.6"
+alloy-signer = "2.0"
+alloy-signer-local = { version = "2.0", features = ["keystore"] }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[profile.release]
+lto = "thin"
