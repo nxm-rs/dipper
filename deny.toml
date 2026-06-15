@@ -44,6 +44,7 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "Unicode-3.0",
+    "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA bundle) via the alloy HTTP transport
 ]
 
 [bans]
@@ -58,4 +59,5 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/nxm-rs/nectar"]
+# nectar is consumed from crates.io, so dipper has no git dependencies.
+allow-git = []
