@@ -1,11 +1,11 @@
 <p align="center">
-  <img src=".github/banner.svg" alt="Nexum · dipper — a cast-like CLI for Ethereum Swarm in Rust" width="100%" />
+  <img src=".github/banner.svg" alt="Nexum · dipper - a cast-like CLI for Ethereum Swarm in Rust" width="100%" />
 </p>
 
 A **`cast`-like CLI for Ethereum Swarm** in Rust. `dipper` drives a
 [`vertex`](https://github.com/nxm-rs/vertex) node over gRPC and uses the
 [`nectar`](https://github.com/nxm-rs/nectar) primitives to build and stamp chunks
-locally — node introspection, chunk transfer, on-chain postage batches, and
+locally - node introspection, chunk transfer, on-chain postage batches, and
 mantaray manifest upload/download from one binary.
 
 > **Pre-release** and under active development. Testnets and lab environments only.
@@ -45,21 +45,21 @@ and expected chain id (Gnosis `100` / Sepolia `11155111`).
 A `<signer>` is `--private-key 0x<hex>` or `--keystore <file>` (`--password`,
 `$DIPPER_KEYSTORE_PASSWORD`, or an interactive prompt).
 
-### node — inspect the local node
+### node - inspect the local node
 
 ```bash
 dipper node status      # overlay address, depth, peer counts (Node.GetStatus)
 dipper node topology    # Kademlia bins (Node.GetTopology)
 ```
 
-### wallet — keys
+### wallet - keys
 
 ```bash
 dipper wallet address --private-key 0x<32-byte-hex>
 dipper wallet address --keystore ./key.json          # prompts for password
 ```
 
-### chunk — single content chunks
+### chunk - single content chunks
 
 ```bash
 # Upload one content chunk (<= 4096 bytes), stamped with a postage batch
@@ -70,7 +70,7 @@ dipper chunk upload ./hello.txt \
 dipper chunk download <addr> --out ./out.bin
 ```
 
-### batch — on-chain postage batches
+### batch - on-chain postage batches
 
 The `batch` commands drive the Swarm `PostageStamp` contract over `--rpc-url`.
 BZZ is a **16-decimal** token; `--amount` is the balance *per chunk*. `bucket-depth`
@@ -86,7 +86,7 @@ dipper batch dilute --batch-id 0x<id> --depth <newDepth> <signer>  # increaseDep
 dipper batch info   --batch-id 0x<id>   # owner / depth / bucketDepth / immutable / balance
 ```
 
-### upload / download / ls — mantaray manifests
+### upload / download / ls - mantaray manifests
 
 Multi-chunk file, directory, and `.tar.gz` upload/download via mantaray
 manifests, stamped with an existing batch.
@@ -124,8 +124,8 @@ the node.
 
 | Repo | What it is |
 | --- | --- |
-| [nectar](https://github.com/nxm-rs/nectar) | Low-level Swarm primitives in Rust — BMT, chunks, postage, mantaray, contract bindings |
-| [vertex](https://github.com/nxm-rs/vertex) | Swarm node in Rust, bee-compatible — `dipper`'s gRPC counterpart |
+| [nectar](https://github.com/nxm-rs/nectar) | Low-level Swarm primitives in Rust - BMT, chunks, postage, mantaray, contract bindings |
+| [vertex](https://github.com/nxm-rs/vertex) | Swarm node in Rust, bee-compatible - `dipper`'s gRPC counterpart |
 | [swarm-contracts](https://github.com/nxm-rs/swarm-contracts) | The Swarm storage-incentives contracts (Foundry) |
 | [swips](https://github.com/nxm-rs/swips) | Swarm Improvement Proposals |
 

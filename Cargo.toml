@@ -56,7 +56,7 @@ nectar-mantaray = { path = "../nectar/crates/mantaray" }
 # IPostageStamp is read-only, so dipper declares its own write interface.
 nectar-contracts = { path = "../nectar/crates/contracts" }
 
-# alloy — versions pinned to match nectar's workspace so Signature/Address/B256
+# alloy - versions pinned to match nectar's workspace so Signature/Address/B256
 # types unify across nectar's public API. The "keystore" feature on
 # alloy-signer-local enables PrivateKeySigner::decrypt_keystore for cast /
 # EIP-2335 JSON keystores.

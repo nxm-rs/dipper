@@ -36,7 +36,7 @@ struct InputFile {
     data: Vec<u8>,
 }
 
-/// `dipper upload <path>` — split + manifest a file, directory, or `.tar.gz`,
+/// `dipper upload <path>` - split + manifest a file, directory, or `.tar.gz`,
 /// then print the manifest root reference (0x-prefixed hex).
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upload(
@@ -113,7 +113,7 @@ pub(crate) async fn upload(
     Ok(())
 }
 
-/// `dipper download <root> [path]` — reconstruct a single file (when `path` is
+/// `dipper download <root> [path]` - reconstruct a single file (when `path` is
 /// given) or the whole manifest tree under `out`.
 pub(crate) async fn download(
     endpoint: &str,
@@ -246,7 +246,7 @@ fn download_raw_file(
     Ok(())
 }
 
-/// `dipper ls <root>` — open the manifest and print each entry (path, address,
+/// `dipper ls <root>` - open the manifest and print each entry (path, address,
 /// content-type; size when `long`).
 pub(crate) async fn ls(endpoint: &str, root: &str, long: bool) -> Result<()> {
     let root_addr = chunkops::parse_address(root)?;

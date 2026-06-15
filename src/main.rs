@@ -1,4 +1,4 @@
-//! dipper — a cast-like CLI for Ethereum Swarm.
+//! dipper - a cast-like CLI for Ethereum Swarm.
 //!
 //! Phase 1: a vertical slice that talks to a `vertex` node over gRPC for node
 //! status/topology and chunk download/upload, plus offline wallet/key loading.

@@ -1,7 +1,7 @@
 //! `GrpcStore`: a nectar chunk store backed by the vertex node's gRPC API.
 //!
 //! Implementing only the *synchronous* `SyncChunkGet`/`SyncChunkPut`/
-//! `SyncChunkHas` traits is sufficient — nectar provides a blanket bridge that
+//! `SyncChunkHas` traits is sufficient - nectar provides a blanket bridge that
 //! derives the async `ChunkGet`/`ChunkPut`/`ChunkHas` automatically, so the
 //! file splitter (`write_file`/`sync_join`) and mantaray manifest can drive
 //! this store directly.

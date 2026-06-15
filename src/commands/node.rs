@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::proto::node::{GetStatusRequest, GetTopologyRequest};
 use crate::rpc;
 
-/// `dipper node status` — fetch and pretty-print node status.
+/// `dipper node status` - fetch and pretty-print node status.
 pub(crate) async fn status(endpoint: &str) -> Result<()> {
     let mut client = rpc::node_client(endpoint).await?;
     let resp = client.get_status(GetStatusRequest {}).await?.into_inner();
@@ -19,7 +19,7 @@ pub(crate) async fn status(endpoint: &str) -> Result<()> {
     Ok(())
 }
 
-/// `dipper node topology` — fetch and pretty-print the topology, bin by bin.
+/// `dipper node topology` - fetch and pretty-print the topology, bin by bin.
 pub(crate) async fn topology(endpoint: &str) -> Result<()> {
     let mut client = rpc::node_client(endpoint).await?;
     let resp = client
