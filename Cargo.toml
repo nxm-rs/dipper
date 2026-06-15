@@ -38,6 +38,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = "0.12"
 prost = "0.13"
 anyhow = "1"
+thiserror = "2"
 hex = "0.4"
 rpassword = "7"
 
@@ -48,6 +49,12 @@ nectar-postage = { path = "../nectar/crates/postage" }
 nectar-postage-issuer = { path = "../nectar/crates/postage-issuer", features = [
     "local-signer",
 ] }
+# Mantaray manifest (phase 3): plain (non-encrypted) manifests over a chunk
+# store; default features only (no `encryption`).
+nectar-mantaray = { path = "../nectar/crates/mantaray" }
+# Contract address book + reusable IERC20 interface (phase 2). Its
+# IPostageStamp is read-only, so dipper declares its own write interface.
+nectar-contracts = { path = "../nectar/crates/contracts" }
 
 # alloy — versions pinned to match nectar's workspace so Signature/Address/B256
 # types unify across nectar's public API. The "keystore" feature on
@@ -56,6 +63,20 @@ nectar-postage-issuer = { path = "../nectar/crates/postage-issuer", features = [
 alloy-primitives = "1.6"
 alloy-signer = "2.0"
 alloy-signer-local = { version = "2.0", features = ["keystore"] }
+
+# alloy chain stack (phase 2 on-chain batch ops). Default features on
+# alloy-provider pull in the reqwest HTTP transport (connect/connect_http).
+alloy-provider = "2.0"
+alloy-contract = "2.0"
+alloy-network = "2.0"
+alloy-rpc-types-eth = "2.0"
+alloy-sol-types = "1.6"
+
+# File-input handling for the mantaray upload pipeline (phase 3).
+walkdir = "2"
+tar = "0.4"
+flate2 = "1"
+mime_guess = "2"
 
 [build-dependencies]
 tonic-build = "0.12"

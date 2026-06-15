@@ -13,9 +13,16 @@ pub(crate) struct Cli {
     #[arg(long, global = true, default_value = "http://127.0.0.1:1635")]
     pub(crate) endpoint: String,
 
-    /// Target network. Accepted now, used in later phases (chain ops).
+    /// Target network. Selects the contract address book and expected chain id
+    /// for on-chain batch operations.
     #[arg(long, global = true, value_enum, default_value_t = Network::Gnosis)]
     pub(crate) network: Network,
+
+    /// Ethereum RPC endpoint for on-chain operations (Gnosis / Sepolia).
+    ///
+    /// Required by the `batch` subcommands; ignored by node/chunk/upload ops.
+    #[arg(long, global = true)]
+    pub(crate) rpc_url: Option<String>,
 
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -46,6 +53,128 @@ pub(crate) enum Command {
     Wallet {
         #[command(subcommand)]
         command: WalletCommand,
+    },
+    /// On-chain postage batch operations (create / topup / dilute / info).
+    Batch {
+        #[command(subcommand)]
+        command: BatchCommand,
+    },
+    /// Upload a file, directory, or `.tar.gz` as a mantaray manifest.
+    Upload {
+        /// Input path: a single file, a directory tree, or a `.tar.gz` archive.
+        path: String,
+
+        /// Postage batch id (hex, 32 bytes).
+        #[arg(long)]
+        batch_id: String,
+
+        /// Batch depth.
+        #[arg(long)]
+        depth: u8,
+
+        /// Bucket depth (must be 16 to match bee).
+        #[arg(long, default_value_t = 16)]
+        bucket_depth: u8,
+
+        /// Website index document served for `bzz://<root>/` (directory /
+        /// archive uploads). Defaults to `index.html`.
+        #[arg(long)]
+        index_document: Option<String>,
+
+        /// Website error document served for missing paths.
+        #[arg(long)]
+        error_document: Option<String>,
+
+        #[command(flatten)]
+        signer: SignerArgs,
+    },
+    /// Download a file or whole manifest tree by its root reference.
+    Download {
+        /// Manifest (or raw file) root reference (hex, `0x` optional).
+        root: String,
+
+        /// Manifest path to a single file. If omitted, the whole tree is
+        /// reconstructed under `--out`.
+        path: Option<String>,
+
+        /// Output target: a file when `[path]` is given, otherwise a directory
+        /// the tree is recreated beneath.
+        #[arg(short, long)]
+        out: Option<String>,
+    },
+    /// List the entries of a manifest by its root reference.
+    Ls {
+        /// Manifest root reference (hex, `0x` optional).
+        root: String,
+
+        /// Include a size column (one extra RPC per entry).
+        #[arg(short, long)]
+        long: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum BatchCommand {
+    /// Create a postage batch: BZZ.approve then PostageStamp.createBatch.
+    Create {
+        /// Initial balance per chunk, in BZZ (decimal string, 16-decimal).
+        #[arg(long)]
+        amount: String,
+
+        /// Batch depth (number of chunks = 2^depth).
+        #[arg(long)]
+        depth: u8,
+
+        /// Bucket depth (default 16 to match bee).
+        #[arg(long, default_value_t = 16)]
+        bucket_depth: u8,
+
+        /// Immutable batch (cannot be diluted).
+        #[arg(long)]
+        immutable: bool,
+
+        /// Batch owner (defaults to the signer's address).
+        #[arg(long)]
+        owner: Option<String>,
+
+        /// 32-byte nonce (hex); random if omitted.
+        #[arg(long)]
+        nonce: Option<String>,
+
+        #[command(flatten)]
+        signer: SignerArgs,
+    },
+    /// Top up an existing batch: PostageStamp.topUp(batchId, amountPerChunk).
+    Topup {
+        /// Batch id (hex, 32 bytes).
+        #[arg(long)]
+        batch_id: String,
+
+        /// Top-up balance per chunk, in BZZ (decimal string, 16-decimal).
+        #[arg(long)]
+        amount: String,
+
+        #[command(flatten)]
+        signer: SignerArgs,
+    },
+    /// Increase batch depth (a.k.a. dilute): PostageStamp.increaseDepth.
+    Dilute {
+        /// Batch id (hex, 32 bytes).
+        #[arg(long)]
+        batch_id: String,
+
+        /// New depth; must exceed the current batch depth.
+        #[arg(long)]
+        depth: u8,
+
+        #[command(flatten)]
+        signer: SignerArgs,
+    },
+    /// Read batch state: owner / depth / bucketDepth / immutable / balance.
+    Info {
+        /// Batch id (hex, 32 bytes).
+        #[arg(long)]
+        batch_id: String,
     },
 }
 
