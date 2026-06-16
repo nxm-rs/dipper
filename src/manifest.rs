@@ -26,17 +26,62 @@ struct InputFile {
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upload(
     endpoint: &str,
+    network: crate::cli::Network,
+    rpc_url: Option<&str>,
     path: &str,
-    batch_id: &str,
-    depth: u8,
+    batch_id: Option<&str>,
+    depth: Option<u8>,
     bucket_depth: u8,
+    immutable: bool,
     index_document: Option<&str>,
     error_document: Option<&str>,
     signer: &SignerArgs,
 ) -> Result<()> {
-    let batch_id = parse_batch_id(batch_id)?;
     let signer = wallet::load_signer(signer)?;
     let owner = signer.address();
+
+    // Resolve the batch geometry: either explicit (`--batch-id` + `--depth`) or
+    // auto-selected from a batch the signer owns, discovered from chain logs.
+    let (batch_id, depth, bucket_depth, immutable) = match batch_id {
+        Some(id) => {
+            let id = parse_batch_id(id)?;
+            let depth = depth.context("--depth is required when --batch-id is given")?;
+            (id, depth, bucket_depth, immutable)
+        }
+        None => {
+            let rpc_url = rpc_url.context(
+                "--rpc-url is required to auto-discover a batch when --batch-id is omitted",
+            )?;
+            let addrs = crate::chain::addrs_for(network);
+            let provider = crate::chain::read_provider(rpc_url, &addrs).await?;
+            let discovered = crate::chain::discover_batches(&provider, &addrs, owner)
+                .await
+                .context("failed to discover batches from chain logs")?;
+            let chosen = discovered
+                .into_iter()
+                .find(|b| b.live && b.remaining_per_chunk > alloy_primitives::U256::ZERO)
+                .context(
+                    "no live, funded batch found for the signer; pass --batch-id explicitly",
+                )?;
+            eprintln!(
+                "Auto-selected batch {:#x} (depth {}, bucket {}, {})",
+                chosen.batch_id,
+                chosen.depth,
+                chosen.bucket_depth,
+                if chosen.immutable {
+                    "immutable"
+                } else {
+                    "mutable"
+                },
+            );
+            (
+                chosen.batch_id,
+                chosen.depth,
+                chosen.bucket_depth,
+                chosen.immutable,
+            )
+        }
+    };
 
     // Collect the input set and decide whether it is a website (dir/archive)
     // that should carry an index document.
@@ -52,7 +97,7 @@ pub(crate) async fn upload(
     // Recover the portable usage snapshot for this batch (or start fresh) so
     // stamping resumes from the issuance state published by any prior session,
     // and content stamps never collide on a per-bucket index across devices.
-    let batch = nectar_postage::Batch::new(batch_id, 0, 0, owner, depth, bucket_depth, false);
+    let batch = nectar_postage::Batch::new(batch_id, 0, 0, owner, depth, bucket_depth, immutable);
     let source = crate::usage::ChunkClientSource::new(rpc::chunk_client_on(channel.clone()));
     let snapshot = crate::usage::open_snapshot(&source, &batch)
         .await

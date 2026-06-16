@@ -63,6 +63,9 @@ async fn main() -> Result<()> {
             WalletCommand::Address { signer } => commands::wallet::address(&signer)?,
         },
         Command::Batch { command } => match command {
+            BatchCommand::List { signer } => {
+                chain::list(require_rpc_url()?, network, endpoint, &signer).await?
+            }
             BatchCommand::Create {
                 amount,
                 depth,
@@ -104,16 +107,20 @@ async fn main() -> Result<()> {
             batch_id,
             depth,
             bucket_depth,
+            immutable,
             index_document,
             error_document,
             signer,
         } => {
             manifest::upload(
                 endpoint,
+                network,
+                cli.rpc_url.as_deref(),
                 &path,
-                &batch_id,
+                batch_id.as_deref(),
                 depth,
                 bucket_depth,
+                immutable,
                 index_document.as_deref(),
                 error_document.as_deref(),
                 &signer,

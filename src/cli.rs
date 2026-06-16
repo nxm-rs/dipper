@@ -64,17 +64,21 @@ pub(crate) enum Command {
         /// Input path: a single file, a directory tree, or a `.tar.gz` archive.
         path: String,
 
-        /// Postage batch id (hex, 32 bytes).
+        /// Postage batch id (hex, 32 bytes); if omitted, discovered from chain (needs `--rpc-url`).
         #[arg(long)]
-        batch_id: String,
+        batch_id: Option<String>,
 
-        /// Batch depth.
+        /// Batch depth; ignored when `--batch-id` is omitted.
         #[arg(long)]
-        depth: u8,
+        depth: Option<u8>,
 
-        /// Bucket depth (must be 16 to match bee).
+        /// Bucket depth (must be 16 to match bee); ignored when `--batch-id` is omitted.
         #[arg(long, default_value_t = 16)]
         bucket_depth: u8,
+
+        /// Mark the batch immutable; must match the on-chain batch. Ignored when `--batch-id` omitted.
+        #[arg(long)]
+        immutable: bool,
 
         /// Website index document served for `bzz://<root>/` (directory /
         /// archive uploads). Defaults to `index.html`.
@@ -115,6 +119,11 @@ pub(crate) enum Command {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum BatchCommand {
+    /// Discover and list every postage batch the signer owns, with on-chain state and usage.
+    List {
+        #[command(flatten)]
+        signer: SignerArgs,
+    },
     /// Create a postage batch: BZZ.approve then PostageStamp.createBatch.
     Create {
         /// Initial balance per chunk, in BZZ (decimal string, 16-decimal).
