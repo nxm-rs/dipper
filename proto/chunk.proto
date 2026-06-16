@@ -13,6 +13,18 @@ service Chunk {
   // UploadChunk pushes a pre-stamped chunk to the Swarm network.
   // The chunk is forwarded to the responsible storer via PushSync.
   rpc UploadChunk(UploadChunkRequest) returns (UploadChunkResponse);
+
+  // UploadChunks pushes a stream of pre-stamped chunks to the Swarm network,
+  // streaming back one receipt per chunk in input order. The byte-bounded
+  // upload pipeline backs this RPC: it prefetches ahead of the consumer up to a
+  // memory window and stops pulling new chunks the instant the receipt consumer
+  // stops draining, so a long upload stays flat in memory on both ends.
+  rpc UploadChunks(stream UploadChunkRequest) returns (stream UploadChunkResponse);
+
+  // RetrieveChunks retrieves a stream of chunks by address, streaming back one
+  // response per requested address in input order. Backed by the same
+  // byte-bounded download pipeline as the single-chunk retrieval.
+  rpc RetrieveChunks(stream RetrieveChunkRequest) returns (stream RetrieveChunkResponse);
 }
 
 // ChunkType identifies how the chunk data is reconstructed on upload.

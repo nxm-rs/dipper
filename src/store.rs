@@ -1,27 +1,5 @@
-//! `GrpcStore`: a nectar chunk store backed by the vertex node's gRPC API.
-//!
-//! Implementing only the *synchronous* `SyncChunkGet`/`SyncChunkPut`/
-//! `SyncChunkHas` traits is sufficient - nectar provides a blanket bridge that
-//! derives the async `ChunkGet`/`ChunkPut`/`ChunkHas` automatically, so the
-//! file splitter (`write_file`/`sync_join`) and mantaray manifest can drive
-//! this store directly.
-//!
-//! `put` stamps each chunk (via a single shared [`BatchStamper`] so the issuer
-//! tracks per-bucket indices monotonically) and uploads it; `get` retrieves the
-//! wire body and reconstructs + verifies a `ContentChunk`. Both bridge their
-//! async RPC over a captured `tokio::runtime::Handle`.
-//!
-//! ## Sync → async bridging
-//!
-//! The `SyncChunkGet`/`SyncChunkPut` methods are synchronous, yet the tonic
-//! client is async. They are also invoked from the parallel splitter / mantaray
-//! worker threads. Each method therefore drives its RPC with
-//! [`tokio::task::block_in_place`] plus the captured
-//! [`tokio::runtime::Handle::block_on`], which
-//! is the standard pattern for a sync method that must await inside a
-//! multi-thread tokio runtime. The callers in `manifest.rs` additionally wrap
-//! the CPU-bound split/manifest work in `spawn_blocking` so the BMT hashing
-//! runs off the async workers.
+//! `GrpcStore`: a nectar sync chunk store over the vertex node's gRPC API.
+//! Writes flow through one streaming upload; reads bridge async RPCs from the sync traits.
 
 use std::sync::{Arc, Mutex};
 
@@ -31,20 +9,22 @@ use nectar_primitives::{
     AnyChunk, ChunkAddress, ContentChunk, DEFAULT_BODY_SIZE,
     store::{SyncChunkGet, SyncChunkHas, SyncChunkPut},
 };
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::proto::chunk::{
     ChunkType, HasChunkRequest, RetrieveChunkRequest, UploadChunkRequest, chunk_client::ChunkClient,
 };
 use tonic::transport::Channel;
 
-/// Chunk body size used everywhere in dipper (4096 bytes).
+/// Chunk body size used everywhere in dipper.
 pub(crate) const BS: usize = DEFAULT_BODY_SIZE;
 
+/// Bound on the in-flight stamped-chunk channel, applying upload backpressure.
+const UPLOAD_CHANNEL_CAPACITY: usize = 256;
+
 /// Errors surfaced by [`GrpcStore`]'s chunk operations.
-///
-/// Must be a concrete `std::error::Error + Send + Sync + 'static` to satisfy
-/// the `SyncChunkGet`/`SyncChunkPut` associated-`Error` bound (so it cannot be
-/// `anyhow::Error`).
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum GrpcStoreError {
     /// Transport / status error from a gRPC call.
@@ -62,32 +42,42 @@ pub(crate) enum GrpcStoreError {
     /// The requested chunk was not found on the network.
     #[error("chunk not found: {0}")]
     NotFound(String),
+
+    /// The upload stream closed before a chunk could be enqueued.
+    #[error("upload stream closed: {0}")]
+    UploadClosed(String),
 }
 
-/// Shared inner state behind an [`Arc`] so [`GrpcStore`] is cheaply `Clone`
-/// (required by `sync_join`'s `G: Clone + Send + Sync` bound).
+/// State shared with the upload drain task: the sender plus its join handle.
+struct UploadStream {
+    /// Stamped requests; `None` once [`GrpcStore::finish`] closes the channel.
+    sender: Mutex<Option<mpsc::Sender<UploadChunkRequest>>>,
+    /// The drain task, joined by [`GrpcStore::finish`].
+    task: Mutex<Option<JoinHandle<Result<(), GrpcStoreError>>>>,
+}
+
+/// Shared inner state behind an [`Arc`] so [`GrpcStore`] is cheaply `Clone`.
 pub(crate) struct GrpcStoreInner {
-    /// Async tonic client; cloned per-RPC for `&self` access.
+    /// Async tonic client, cloned per-RPC on the read path.
     pub(crate) chunk_client: ChunkClient<Channel>,
-    /// One shared stamper; the issuer must be a single instance so per-bucket
-    /// indices never collide across chunks. Behind a `Mutex` because `put`
-    /// takes `&self` yet stamping mutates issuer state.
-    pub(crate) stamper: Mutex<BatchStamper<MemoryIssuer, PrivateKeySigner>>,
-    /// Runtime handle used to drive each async RPC from the sync trait methods.
+    /// One shared stamper so per-bucket indices never collide. `None` read-only.
+    pub(crate) stamper: Mutex<Option<BatchStamper<MemoryIssuer, PrivateKeySigner>>>,
+    /// Runtime handle driving each async read RPC from the sync trait methods.
     pub(crate) handle: tokio::runtime::Handle,
     /// Whether the node should re-validate stamps before forwarding.
     pub(crate) validate: bool,
+    /// The single upload stream every `put` feeds. `None` read-only.
+    upload: Option<UploadStream>,
 }
 
-/// gRPC-backed chunk store. `Clone` is cheap (shares one [`GrpcStoreInner`]).
+/// gRPC-backed chunk store; `Clone` is cheap.
 #[derive(Clone)]
 pub(crate) struct GrpcStore {
     inner: Arc<GrpcStoreInner>,
 }
 
 impl GrpcStore {
-    /// Build a store from a connected chunk client, a batch's postage geometry,
-    /// and a signer. The stamper is constructed once and shared.
+    /// Build a writable store from a client, a batch's postage geometry, and a signer.
     pub(crate) fn new(
         chunk_client: ChunkClient<Channel>,
         batch_id: alloy_primitives::B256,
@@ -99,42 +89,91 @@ impl GrpcStore {
     ) -> Self {
         let issuer = MemoryIssuer::new(batch_id, depth, bucket_depth);
         let stamper = BatchStamper::new(issuer, signer);
+
+        let upload = Some(Self::spawn_upload(chunk_client.clone(), &handle));
+
         Self {
             inner: Arc::new(GrpcStoreInner {
                 chunk_client,
-                stamper: Mutex::new(stamper),
+                stamper: Mutex::new(Some(stamper)),
                 handle,
                 validate,
+                upload,
             }),
         }
     }
 
     /// Build a read-only store (no stamping/upload) for `ls`/`download`.
-    ///
-    /// The stamper is present but unused on the read path; `get`/`has` never
-    /// touch it. A dummy zero batch is fine because reads do not stamp.
     pub(crate) fn connect_read_only(
         chunk_client: ChunkClient<Channel>,
-        signer: PrivateKeySigner,
+        _signer: PrivateKeySigner,
         handle: tokio::runtime::Handle,
     ) -> Self {
-        Self::new(
-            chunk_client,
-            alloy_primitives::B256::ZERO,
-            0,
-            0,
-            signer,
-            handle,
-            false,
-        )
+        Self {
+            inner: Arc::new(GrpcStoreInner {
+                chunk_client,
+                stamper: Mutex::new(None),
+                handle,
+                validate: false,
+                upload: None,
+            }),
+        }
+    }
+
+    /// Spawn the upload drain task owning one client-streaming `upload_chunks` call.
+    fn spawn_upload(
+        mut client: ChunkClient<Channel>,
+        handle: &tokio::runtime::Handle,
+    ) -> UploadStream {
+        let (tx, rx) = mpsc::channel::<UploadChunkRequest>(UPLOAD_CHANNEL_CAPACITY);
+
+        let task = handle.spawn(async move {
+            let request_stream = ReceiverStream::new(rx);
+            let mut receipts = client.upload_chunks(request_stream).await?.into_inner();
+
+            // Drain the receipts so the server keeps making progress; the
+            // receipt contents are not surfaced per-chunk here, but a transport
+            // error or a server-side upload failure aborts the session.
+            while let Some(receipt) = receipts.message().await? {
+                let _ = receipt;
+            }
+            Ok(())
+        });
+
+        UploadStream {
+            sender: Mutex::new(Some(tx)),
+            task: Mutex::new(Some(task)),
+        }
+    }
+
+    /// Close the upload stream and await the drain task, surfacing any upload failure. Idempotent.
+    pub(crate) async fn finish(&self) -> Result<(), GrpcStoreError> {
+        if let Some(upload) = &self.inner.upload {
+            {
+                let mut guard = upload.sender.lock().map_err(|e| {
+                    GrpcStoreError::UploadClosed(format!("sender mutex poisoned: {e}"))
+                })?;
+                *guard = None;
+            }
+
+            let task = {
+                let mut guard = upload.task.lock().map_err(|e| {
+                    GrpcStoreError::UploadClosed(format!("task mutex poisoned: {e}"))
+                })?;
+                guard.take()
+            };
+
+            if let Some(handle) = task {
+                handle.await.map_err(|e| {
+                    GrpcStoreError::UploadClosed(format!("upload task panicked: {e}"))
+                })??;
+            }
+        }
+
+        Ok(())
     }
 
     /// Drive an async future to completion from a sync context.
-    ///
-    /// `block_in_place` parks the current multi-thread worker so it can block,
-    /// then the captured handle drives the future. This is safe because dipper
-    /// uses the default multi-thread `#[tokio::main]` runtime and the callers
-    /// invoke the splitter/manifest from `spawn_blocking`.
     fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
         let handle = self.inner.handle.clone();
         tokio::task::block_in_place(move || handle.block_on(fut))
@@ -182,11 +221,14 @@ impl SyncChunkPut<BS> for GrpcStore {
         // Stamp the chunk; the shared issuer assigns the next free per-bucket
         // index for this address.
         let stamp = {
-            let mut stamper = self
+            let mut guard = self
                 .inner
                 .stamper
                 .lock()
                 .map_err(|e| GrpcStoreError::Stamp(format!("stamper mutex poisoned: {e}")))?;
+            let stamper = guard.as_mut().ok_or_else(|| {
+                GrpcStoreError::Stamp("put on a read-only or finished store".to_owned())
+            })?;
             stamper
                 .stamp(&address)
                 .map_err(|e| GrpcStoreError::Stamp(e.to_string()))?
@@ -202,8 +244,30 @@ impl SyncChunkPut<BS> for GrpcStore {
             validate: self.inner.validate,
         };
 
-        let mut client = self.inner.chunk_client.clone();
-        self.block_on(async move { client.upload_chunk(request).await })?;
+        // Hand the stamped chunk to the single upload stream. `blocking_send`
+        // parks the calling splitter/manifest worker when the channel is full,
+        // applying backpressure without needing the runtime handle. A closed
+        // channel means the drain task ended early (a server-side abort);
+        // `finish` will surface the underlying error.
+        let upload =
+            self.inner.upload.as_ref().ok_or_else(|| {
+                GrpcStoreError::UploadClosed("put on a read-only store".to_owned())
+            })?;
+        let sender = {
+            let guard = upload
+                .sender
+                .lock()
+                .map_err(|e| GrpcStoreError::UploadClosed(format!("sender mutex poisoned: {e}")))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    GrpcStoreError::UploadClosed("upload stream already finished".to_owned())
+                })?
+                .clone()
+        };
+        sender
+            .blocking_send(request)
+            .map_err(|_| GrpcStoreError::UploadClosed("upload stream closed".to_owned()))?;
         Ok(())
     }
 }

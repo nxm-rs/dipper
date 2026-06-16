@@ -1,14 +1,4 @@
-//! Mantaray manifest pipeline: upload, download, and list (phase 3).
-//!
-//! All three route through the [`crate::store::GrpcStore`], which implements
-//! nectar's `SyncChunkGet`/`SyncChunkPut`. `upload` splits each input file into
-//! the store (stamp+upload per chunk) and builds a `PlainManifest` whose nodes
-//! upload through the same path; `download`/`ls` open the manifest read-only and
-//! reconstruct files via `sync_join`.
-//!
-//! The split / manifest work is CPU-bound (BMT hashing, trie serialization) and
-//! drives blocking gRPC from the store's sync trait methods, so it runs inside
-//! `tokio::task::spawn_blocking` off the async workers.
+//! Mantaray manifest pipeline: upload, download, and list, over a [`crate::store::GrpcStore`].
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -17,27 +7,22 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 
 use nectar_mantaray::{MantarayError, PlainManifest, metadata};
-use nectar_primitives::file::{SyncChunkPutExt, sync_join};
+use nectar_primitives::file::SyncChunkPutExt;
 
 use crate::chunkops;
 use crate::cli::SignerArgs;
 use crate::rpc;
-use crate::store::{BS, GrpcStore};
+use crate::store::GrpcStore;
 use crate::wallet;
 
-/// One file to be added to a manifest: its normalized manifest path, content
-/// type, and raw bytes.
+/// One file to be added to a manifest.
 struct InputFile {
-    /// Manifest path, using `/` separators (no leading slash).
     path: String,
-    /// Guessed MIME type for the `Content-Type` metadata.
     content_type: String,
-    /// File contents.
     data: Vec<u8>,
 }
 
-/// `dipper upload <path>` - split + manifest a file, directory, or `.tar.gz`,
-/// then print the manifest root reference (0x-prefixed hex).
+/// `dipper upload <path>`: split + manifest a file/dir/`.tar.gz`, printing the root reference.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn upload(
     endpoint: &str,
@@ -62,6 +47,9 @@ pub(crate) async fn upload(
     let handle = tokio::runtime::Handle::current();
     let client = rpc::chunk_client(endpoint).await?;
     let store = GrpcStore::new(client, batch, depth, bucket_depth, signer, handle, false);
+    // Keep a handle to the store so the upload stream can be closed and awaited
+    // after the (blocking) split/manifest work has fed every chunk through it.
+    let upload_store = store.clone();
 
     // A directory / archive defaults to serving `index.html`; an explicit flag
     // always wins. A single file gets no index document unless asked.
@@ -109,12 +97,26 @@ pub(crate) async fn upload(
     .await
     .context("upload task panicked")??;
 
+    // Close the upload stream and await the drain task: every chunk has now been
+    // stamped and enqueued, so this flushes the stream and surfaces any
+    // server-side upload failure (a bad stamp, a missing storer) before the
+    // root is reported as durable.
+    upload_store
+        .finish()
+        .await
+        .context("upload stream failed")?;
+
     println!("0x{}", hex::encode(root.as_bytes()));
     Ok(())
 }
 
-/// `dipper download <root> [path]` - reconstruct a single file (when `path` is
-/// given) or the whole manifest tree under `out`.
+/// One file to reconstruct: where to fetch it and where to write it.
+struct DownloadItem {
+    file_ref: nectar_primitives::ChunkAddress,
+    dest: PathBuf,
+}
+
+/// `dipper download <root> [path]`: reconstruct a single file or the whole tree under `out`.
 pub(crate) async fn download(
     endpoint: &str,
     root: &str,
@@ -126,32 +128,58 @@ pub(crate) async fn download(
     let out = out.map(str::to_owned);
 
     let handle = tokio::runtime::Handle::current();
-    let client = rpc::chunk_client(endpoint).await?;
+    // One shared channel: the sync store resolves the manifest over it, and the
+    // streaming reconstruction multiplexes its long-lived RPC over the same
+    // HTTP/2 connection.
+    let channel = rpc::connect(endpoint).await?;
+    let client = rpc::chunk_client_on(channel.clone());
     // Reads do not stamp, but the store still needs a signer-shaped stamper;
     // synthesize a throwaway key (never used on the read path).
     let signer = alloy_signer_local::PrivateKeySigner::random();
     let store = GrpcStore::connect_read_only(client, signer, handle);
 
     let root_hex = hex::encode(root_addr.as_bytes());
-    tokio::task::spawn_blocking(move || -> Result<()> {
+
+    // Step 1: resolve the manifest on the sync store (small) to a plan of files.
+    let plan_root_hex = root_hex.clone();
+    let items = tokio::task::spawn_blocking(move || -> Result<Vec<DownloadItem>> {
         path.as_deref().map_or_else(
-            || download_tree(&store, root_addr, &root_hex, out.as_deref()),
-            |p| download_one(&store, root_addr, p, out.as_deref()),
+            || resolve_tree(&store, root_addr, &plan_root_hex, out.as_deref()),
+            |p| resolve_one(&store, root_addr, p, out.as_deref()),
         )
     })
     .await
-    .context("download task panicked")??;
+    .context("manifest resolution task panicked")??;
+
+    // Step 2: reconstruct each file's bytes over the streaming RPC and write it.
+    let mut count = 0usize;
+    for item in items {
+        if let Some(parent) = item.dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
+        }
+        let bytes = crate::download::download_file(channel.clone(), item.file_ref)
+            .await
+            .with_context(|| format!("failed to reconstruct {}", item.dest.display()))?;
+        std::fs::write(&item.dest, &bytes)
+            .with_context(|| format!("failed to write {}", item.dest.display()))?;
+        eprintln!("Wrote {} bytes to {}", bytes.len(), item.dest.display());
+        count += 1;
+    }
+    if count > 1 {
+        eprintln!("Wrote {count} file(s)");
+    }
 
     Ok(())
 }
 
-/// Download a single manifest path to a file.
-fn download_one(
+/// Resolve a single manifest path to a one-item download plan.
+fn resolve_one(
     store: &GrpcStore,
     root: nectar_primitives::ChunkAddress,
     path: &str,
     out: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<DownloadItem>> {
     let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
 
     let entry = manifest.lookup(path).map_err(|e| match e {
@@ -165,39 +193,34 @@ fn download_one(
         .address()
         .ok_or_else(|| anyhow!("path {path} has no file reference"))?;
 
-    let bytes = sync_join::<_, _, BS>(store.clone(), *file_ref)
-        .with_context(|| format!("failed to reconstruct {path}"))?;
-
     // --out is a file target; default to the path's basename in cwd.
     let dest: PathBuf = out.map_or_else(|| PathBuf::from(basename(path)), PathBuf::from);
-    std::fs::write(&dest, &bytes).with_context(|| format!("failed to write {}", dest.display()))?;
-    eprintln!("Wrote {} bytes to {}", bytes.len(), dest.display());
-    Ok(())
+    Ok(vec![DownloadItem {
+        file_ref: *file_ref,
+        dest,
+    }])
 }
 
-/// Download the whole manifest tree under `out` (a directory). Falls back to
-/// treating `root` as a raw file reference when it is not a manifest.
-fn download_tree(
+/// Resolve the whole manifest tree under `out` to a plan, or `root` as a raw file.
+fn resolve_tree(
     store: &GrpcStore,
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
     out: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<DownloadItem>> {
     let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
 
-    // Eagerly collect entries so the manifest's `&mut` borrow is released before
-    // we sync_join (which needs the store independently). A mantaray decode
-    // error here means `root` is a raw file, not a manifest.
+    // A mantaray decode error here means `root` is a raw file, not a manifest.
     let entries = match manifest.entries() {
         Ok(entries) => entries,
         Err(_) => {
-            return download_raw_file(store, root, root_hex, out);
+            return resolve_raw_file(root, root_hex, out);
         }
     };
 
     let out_dir: PathBuf = out.map_or_else(|| PathBuf::from("."), PathBuf::from);
 
-    let mut count = 0usize;
+    let mut items = Vec::new();
     for entry in entries {
         let Some(addr) = entry.address() else {
             // Metadata-only node (e.g. the root-path index marker): skip.
@@ -207,32 +230,20 @@ fn download_tree(
             .path_str()
             .ok_or_else(|| anyhow!("manifest entry has a non-utf8 path"))?;
 
-        let dest = out_dir.join(rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-        let bytes = sync_join::<_, _, BS>(store.clone(), *addr)
-            .with_context(|| format!("failed to reconstruct {rel}"))?;
-        std::fs::write(&dest, &bytes)
-            .with_context(|| format!("failed to write {}", dest.display()))?;
-        count += 1;
+        items.push(DownloadItem {
+            file_ref: *addr,
+            dest: out_dir.join(rel),
+        });
     }
-
-    eprintln!("Wrote {count} file(s) under {}", out_dir.display());
-    Ok(())
+    Ok(items)
 }
 
-/// Treat `root` as a single uploaded file (not a manifest) and write it out.
-fn download_raw_file(
-    store: &GrpcStore,
+/// Treat `root` as a single uploaded file (not a manifest) and plan to write it.
+fn resolve_raw_file(
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
     out: Option<&str>,
-) -> Result<()> {
-    let bytes = sync_join::<_, _, BS>(store.clone(), root)
-        .context("root is neither a manifest nor a valid file reference")?;
-
+) -> Result<Vec<DownloadItem>> {
     let dest: PathBuf = out.map_or_else(
         || PathBuf::from(root_hex),
         |o| {
@@ -241,13 +252,13 @@ fn download_raw_file(
             if p.is_dir() { p.join(root_hex) } else { p }
         },
     );
-    std::fs::write(&dest, &bytes).with_context(|| format!("failed to write {}", dest.display()))?;
-    eprintln!("Wrote {} bytes to {}", bytes.len(), dest.display());
-    Ok(())
+    Ok(vec![DownloadItem {
+        file_ref: root,
+        dest,
+    }])
 }
 
-/// `dipper ls <root>` - open the manifest and print each entry (path, address,
-/// content-type; size when `long`).
+/// `dipper ls <root>`: print each manifest entry (size too when `long`).
 pub(crate) async fn ls(endpoint: &str, root: &str, long: bool) -> Result<()> {
     let root_addr = chunkops::parse_address(root)?;
 
@@ -287,8 +298,7 @@ pub(crate) async fn ls(endpoint: &str, root: &str, long: bool) -> Result<()> {
     Ok(())
 }
 
-/// Gather the upload input set from `path`, returning the files and whether the
-/// input is a collection (directory / archive) that warrants an index document.
+/// Gather the upload input set from `path`; second tuple field is true for a collection.
 fn collect_inputs(path: &str) -> Result<(Vec<InputFile>, bool)> {
     let lower = path.to_ascii_lowercase();
     if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {

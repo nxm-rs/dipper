@@ -1,14 +1,10 @@
-//! dipper - a cast-like CLI for Ethereum Swarm.
-//!
-//! Phase 1: a vertical slice that talks to a `vertex` node over gRPC for node
-//! status/topology and chunk download/upload, plus offline wallet/key loading.
-//! Network/chain operations (phase 2) and mantaray/file ops (phase 3) come
-//! later; the `--network` flag is accepted now but not yet used.
+//! dipper - a cast-like CLI for Ethereum Swarm, talking to a vertex node over gRPC.
 
 mod chain;
 mod chunkops;
 mod cli;
 mod commands;
+mod download;
 mod manifest;
 mod proto;
 mod rpc;
