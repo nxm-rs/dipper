@@ -9,6 +9,7 @@ mod manifest;
 mod proto;
 mod rpc;
 mod store;
+mod usage;
 mod wallet;
 
 use anyhow::{Context, Result};

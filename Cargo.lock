@@ -1612,6 +1612,7 @@ dependencies = [
  "nectar-mantaray",
  "nectar-postage",
  "nectar-postage-issuer",
+ "nectar-postage-usage",
  "nectar-primitives",
  "prost",
  "rpassword",
@@ -2816,6 +2817,23 @@ dependencies = [
  "nectar-postage",
  "nectar-primitives",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "nectar-postage-usage"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ef45b478e2d93fd88fc48e93e046edd9bd4c66ae7beb5e4f6a5e7fb0bbccfd9"
+dependencies = [
+ "alloy-primitives",
+ "alloy-signer",
+ "auto_impl",
+ "bytes",
+ "nectar-postage",
+ "nectar-postage-issuer",
+ "nectar-primitives",
+ "thiserror 2.0.18",
+ "web-time",
 ]
 
 [[package]]

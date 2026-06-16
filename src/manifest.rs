@@ -34,8 +34,9 @@ pub(crate) async fn upload(
     error_document: Option<&str>,
     signer: &SignerArgs,
 ) -> Result<()> {
-    let batch = parse_batch_id(batch_id)?;
+    let batch_id = parse_batch_id(batch_id)?;
     let signer = wallet::load_signer(signer)?;
+    let owner = signer.address();
 
     // Collect the input set and decide whether it is a website (dir/archive)
     // that should carry an index document.
@@ -45,8 +46,19 @@ pub(crate) async fn upload(
     }
 
     let handle = tokio::runtime::Handle::current();
-    let client = rpc::chunk_client(endpoint).await?;
-    let store = GrpcStore::new(client, batch, depth, bucket_depth, signer, handle, false);
+    let channel = rpc::connect(endpoint).await?;
+    let client = rpc::chunk_client_on(channel.clone());
+
+    // Recover the portable usage snapshot for this batch (or start fresh) so
+    // stamping resumes from the issuance state published by any prior session,
+    // and content stamps never collide on a per-bucket index across devices.
+    let batch = nectar_postage::Batch::new(batch_id, 0, 0, owner, depth, bucket_depth, false);
+    let source = crate::usage::ChunkClientSource::new(rpc::chunk_client_on(channel.clone()));
+    let snapshot = crate::usage::open_snapshot(&source, &batch)
+        .await
+        .context("failed to open postage usage snapshot")?;
+
+    let store = GrpcStore::new(client, snapshot, owner, signer, handle, false);
     // Keep a handle to the store so the upload stream can be closed and awaited
     // after the (blocking) split/manifest work has fed every chunk through it.
     let upload_store = store.clone();
