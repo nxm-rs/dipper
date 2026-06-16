@@ -44,6 +44,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: NodeCommand,
     },
+    /// Drive and inspect the node's peer set (dial / drop / list).
+    Peer {
+        #[command(subcommand)]
+        command: PeerCommand,
+    },
     /// Download, upload, and inspect chunks.
     Chunk {
         #[command(subcommand)]
@@ -193,6 +198,30 @@ pub(crate) enum NodeCommand {
     Status,
     /// Show Kademlia topology, bin by bin.
     Topology,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PeerCommand {
+    /// Dial a peer by multiaddr and mark the dial for connection.
+    Add {
+        /// Multiaddr to dial (should include a /p2p/<peer_id> component).
+        multiaddr: String,
+    },
+    /// Disconnect a peer by its overlay address.
+    Remove {
+        /// Overlay address (hex, with or without 0x prefix).
+        overlay: String,
+    },
+    /// List peer diagnostics.
+    List {
+        /// Print full diagnostics for each peer (score, PO, uptime, direction, trust, multiaddrs).
+        #[arg(short, long)]
+        long: bool,
+
+        /// Include peers that are known but not currently connected.
+        #[arg(short, long)]
+        all: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

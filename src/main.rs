@@ -15,7 +15,7 @@ mod wallet;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use cli::{BatchCommand, ChunkCommand, Cli, Command, NodeCommand, WalletCommand};
+use cli::{BatchCommand, ChunkCommand, Cli, Command, NodeCommand, PeerCommand, WalletCommand};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,6 +34,11 @@ async fn main() -> Result<()> {
         Command::Node { command } => match command {
             NodeCommand::Status => commands::node::status(endpoint).await?,
             NodeCommand::Topology => commands::node::topology(endpoint).await?,
+        },
+        Command::Peer { command } => match command {
+            PeerCommand::Add { multiaddr } => commands::peer::add(endpoint, &multiaddr).await?,
+            PeerCommand::Remove { overlay } => commands::peer::remove(endpoint, &overlay).await?,
+            PeerCommand::List { long, all } => commands::peer::list(endpoint, long, all).await?,
         },
         Command::Chunk { command } => match command {
             ChunkCommand::Download { addr, out, raw } => {
