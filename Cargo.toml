@@ -50,6 +50,15 @@ rpassword = "7"
 nectar-primitives = "0.2.1"
 nectar-postage = "0.2.1"
 nectar-postage-issuer = { version = "0.2.1", features = ["local-signer"] }
+# Portable postage usage: persists per-bucket issuance counters inside the batch
+# itself as single-owner chunks so stamping state roams across devices from just
+# the owner key + batch id. `issuer` gives `SnapshotIssuer: StampIssuer` so a
+# snapshot backs the existing `BatchStamper`; `client` brings the
+# `ChunkSource`/`ChunkSink` traits and the open/flush ceremony helpers.
+nectar-postage-usage = { version = "0.2.1", features = [
+    "issuer",
+    "client",
+] }
 # Mantaray manifest (phase 3): plain (non-encrypted) manifests over a chunk
 # store; default features only (no `encryption`).
 nectar-mantaray = "0.2.1"

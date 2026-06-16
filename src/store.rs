@@ -3,8 +3,10 @@
 
 use std::sync::{Arc, Mutex};
 
+use alloy_primitives::Address;
 use alloy_signer_local::PrivateKeySigner;
-use nectar_postage_issuer::{BatchStamper, MemoryIssuer, Stamper};
+use nectar_postage_issuer::{BatchStamper, Stamper};
+use nectar_postage_usage::{Snapshot, SnapshotIssuer};
 use nectar_primitives::{
     AnyChunk, ChunkAddress, ContentChunk, DEFAULT_BODY_SIZE,
     store::{SyncChunkGet, SyncChunkHas, SyncChunkPut},
@@ -16,6 +18,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::proto::chunk::{
     ChunkType, HasChunkRequest, RetrieveChunkRequest, UploadChunkRequest, chunk_client::ChunkClient,
 };
+use crate::usage::{ChunkClientSink, ChunkClientSource, flush_snapshot};
 use tonic::transport::Channel;
 
 /// Chunk body size used everywhere in dipper.
@@ -60,14 +63,24 @@ struct UploadStream {
 pub(crate) struct GrpcStoreInner {
     /// Async tonic client, cloned per-RPC on the read path.
     pub(crate) chunk_client: ChunkClient<Channel>,
-    /// One shared stamper so per-bucket indices never collide. `None` read-only.
-    pub(crate) stamper: Mutex<Option<BatchStamper<MemoryIssuer, PrivateKeySigner>>>,
+    /// One shared [`SnapshotIssuer`] stamper so per-bucket indices never collide. `None` read-only.
+    pub(crate) stamper: Mutex<Option<BatchStamper<SnapshotIssuer, PrivateKeySigner>>>,
     /// Runtime handle driving each async read RPC from the sync trait methods.
     pub(crate) handle: tokio::runtime::Handle,
     /// Whether the node should re-validate stamps before forwarding.
     pub(crate) validate: bool,
     /// The single upload stream every `put` feeds. `None` read-only.
     upload: Option<UploadStream>,
+    /// Usage-snapshot persistence wiring; `None` read-only.
+    persist: Option<UsagePersist>,
+}
+
+/// The pieces [`GrpcStore::finish`] needs to persist the usage snapshot.
+struct UsagePersist {
+    signer: PrivateKeySigner,
+    owner: Address,
+    source: ChunkClientSource,
+    sink: ChunkClientSink,
 }
 
 /// gRPC-backed chunk store; `Clone` is cheap.
@@ -77,20 +90,25 @@ pub(crate) struct GrpcStore {
 }
 
 impl GrpcStore {
-    /// Build a writable store from a client, a batch's postage geometry, and a signer.
+    /// Build a writable store from a client, a recovered usage [`Snapshot`], and a signer.
     pub(crate) fn new(
         chunk_client: ChunkClient<Channel>,
-        batch_id: alloy_primitives::B256,
-        depth: u8,
-        bucket_depth: u8,
+        snapshot: Snapshot,
+        owner: Address,
         signer: PrivateKeySigner,
         handle: tokio::runtime::Handle,
         validate: bool,
     ) -> Self {
-        let issuer = MemoryIssuer::new(batch_id, depth, bucket_depth);
-        let stamper = BatchStamper::new(issuer, signer);
+        let issuer = SnapshotIssuer::new(snapshot, owner);
+        let stamper = BatchStamper::new(issuer, signer.clone());
 
         let upload = Some(Self::spawn_upload(chunk_client.clone(), &handle));
+        let persist = Some(UsagePersist {
+            signer,
+            owner,
+            source: ChunkClientSource::new(chunk_client.clone()),
+            sink: ChunkClientSink::new(chunk_client.clone()),
+        });
 
         Self {
             inner: Arc::new(GrpcStoreInner {
@@ -99,6 +117,7 @@ impl GrpcStore {
                 handle,
                 validate,
                 upload,
+                persist,
             }),
         }
     }
@@ -116,6 +135,7 @@ impl GrpcStore {
                 handle,
                 validate: false,
                 upload: None,
+                persist: None,
             }),
         }
     }
@@ -146,8 +166,9 @@ impl GrpcStore {
         }
     }
 
-    /// Close the upload stream and await the drain task, surfacing any upload failure. Idempotent.
+    /// Close the upload stream, await the drain task, then flush the usage snapshot. Idempotent.
     pub(crate) async fn finish(&self) -> Result<(), GrpcStoreError> {
+        // Step 1: close and drain the content upload stream.
         if let Some(upload) = &self.inner.upload {
             {
                 let mut guard = upload.sender.lock().map_err(|e| {
@@ -168,6 +189,30 @@ impl GrpcStore {
                     GrpcStoreError::UploadClosed(format!("upload task panicked: {e}"))
                 })??;
             }
+        }
+
+        // Step 2: persist the usage snapshot. Take the stamper out (idempotent:
+        // a second finish finds it already taken) and recover its snapshot.
+        let stamper = {
+            let mut guard = self
+                .inner
+                .stamper
+                .lock()
+                .map_err(|e| GrpcStoreError::Stamp(format!("stamper mutex poisoned: {e}")))?;
+            guard.take()
+        };
+
+        if let (Some(mut stamper), Some(persist)) = (stamper, &self.inner.persist) {
+            let snapshot = stamper.issuer_mut().snapshot_mut();
+            flush_snapshot(
+                snapshot,
+                &persist.owner,
+                &persist.signer,
+                &persist.source,
+                &persist.sink,
+            )
+            .await
+            .map_err(|e| GrpcStoreError::Stamp(format!("usage snapshot flush failed: {e}")))?;
         }
 
         Ok(())
