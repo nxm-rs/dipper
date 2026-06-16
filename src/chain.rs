@@ -14,8 +14,9 @@ use alloy_primitives::{
     utils::{ParseUnits, Unit},
 };
 use alloy_provider::{Provider, ProviderBuilder};
+use alloy_rpc_types_eth::Filter;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{SolValue, sol};
+use alloy_sol_types::{SolEvent, SolValue, sol};
 use anyhow::{Context, Result, bail};
 
 use crate::cli::{Network, SignerArgs};
@@ -86,6 +87,8 @@ pub(crate) struct ChainAddrs {
     pub(crate) bzz: Address,
     /// Expected EVM chain id (100 Gnosis, 11155111 Sepolia).
     pub(crate) chain_id: u64,
+    /// PostageStamp deploy block: the floor for a `BatchCreated` log scan.
+    pub(crate) postage_deploy_block: u64,
 }
 
 /// Address book for the supported networks.
@@ -96,11 +99,13 @@ pub(crate) const fn addrs_for(net: Network) -> ChainAddrs {
             postage: mainnet::POSTAGE_STAMP.address,
             bzz: mainnet::BZZ_TOKEN.address,
             chain_id: 100,
+            postage_deploy_block: mainnet::POSTAGE_STAMP.block,
         },
         Network::Sepolia => ChainAddrs {
             postage: testnet::POSTAGE_STAMP.address,
             bzz: testnet::BZZ_TOKEN.address,
             chain_id: 11155111,
+            postage_deploy_block: testnet::POSTAGE_STAMP.block,
         },
     }
 }
@@ -161,7 +166,7 @@ async fn signed_provider(
 }
 
 /// Build a read-only provider (no wallet) and verify the chain id.
-async fn read_provider(rpc_url: &str, addrs: &ChainAddrs) -> Result<impl Provider> {
+pub(crate) async fn read_provider(rpc_url: &str, addrs: &ChainAddrs) -> Result<impl Provider> {
     let provider = ProviderBuilder::new()
         .connect(rpc_url)
         .await
@@ -431,6 +436,184 @@ pub(crate) async fn dilute(
     }
     println!("Batch diluted");
     println!("  tx hash: {:#x}", receipt.transaction_hash);
+    Ok(())
+}
+
+/// Block window per `eth_getLogs` page.
+const LOG_PAGE_BLOCKS: u64 = 50_000;
+
+/// A postage batch discovered on-chain, reconciled against the live `batches` view.
+#[derive(Debug, Clone)]
+pub(crate) struct DiscoveredBatch {
+    /// The batch id.
+    pub(crate) batch_id: B256,
+    /// Current owner.
+    pub(crate) owner: Address,
+    /// Current depth (reflects any dilution).
+    pub(crate) depth: u8,
+    /// Bucket depth.
+    pub(crate) bucket_depth: u8,
+    /// Whether the batch is immutable.
+    pub(crate) immutable: bool,
+    /// Remaining balance per chunk, in base BZZ units.
+    pub(crate) remaining_per_chunk: U256,
+    /// Whether the live view still reports the batch as existing.
+    pub(crate) live: bool,
+}
+
+/// Discover every postage batch owned by `owner` by paging `BatchCreated` logs.
+pub(crate) async fn discover_batches<P: Provider>(
+    provider: &P,
+    addrs: &ChainAddrs,
+    owner: Address,
+) -> Result<Vec<DiscoveredBatch>> {
+    let head = provider
+        .get_block_number()
+        .await
+        .context("failed to read chain head block")?;
+
+    let created_sig = IPostageStampWrite::BatchCreated::SIGNATURE_HASH;
+
+    // Collect candidate batch ids whose creation owner matches, in creation
+    // order, de-duplicated (a batch is created once, but guard anyway).
+    let mut seen: std::collections::BTreeSet<B256> = std::collections::BTreeSet::new();
+    let mut ordered: Vec<B256> = Vec::new();
+
+    let mut from = addrs.postage_deploy_block;
+    while from <= head {
+        let to = (from + LOG_PAGE_BLOCKS - 1).min(head);
+
+        let filter = Filter::new()
+            .address(addrs.postage)
+            .event_signature(created_sig)
+            .from_block(from)
+            .to_block(to);
+
+        let logs = provider.get_logs(&filter).await.with_context(|| {
+            format!("failed to fetch BatchCreated logs for blocks {from}..={to}")
+        })?;
+
+        for log in logs {
+            let decoded = match log.log_decode::<IPostageStampWrite::BatchCreated>() {
+                Ok(decoded) => decoded,
+                // A non-decodable log under this signature is not ours; skip it.
+                Err(_) => continue,
+            };
+            let event = decoded.inner.data;
+            if event.owner == owner && seen.insert(event.batchId) {
+                ordered.push(event.batchId);
+            }
+        }
+
+        from = to + 1;
+    }
+
+    // Reconcile each candidate against the live view to pick up dilution and
+    // balance changes the creation log cannot reflect.
+    let mut batches = Vec::with_capacity(ordered.len());
+    for batch_id in ordered {
+        let view = CallBuilder::new_sol(
+            provider,
+            &addrs.postage,
+            &IPostageStampWrite::batchesCall { _batchId: batch_id },
+        )
+        .call()
+        .await
+        .with_context(|| format!("failed to read live state for batch {batch_id:#x}"))?;
+
+        let live = view.owner != Address::ZERO;
+        let remaining = if live {
+            CallBuilder::new_sol(
+                provider,
+                &addrs.postage,
+                &IPostageStampWrite::remainingBalanceCall { _batchId: batch_id },
+            )
+            .call()
+            .await
+            .with_context(|| format!("failed to read remaining balance for batch {batch_id:#x}"))?
+        } else {
+            U256::ZERO
+        };
+
+        batches.push(DiscoveredBatch {
+            batch_id,
+            owner: if live { view.owner } else { owner },
+            depth: view.depth,
+            bucket_depth: view.bucketDepth,
+            immutable: view.immutableFlag,
+            remaining_per_chunk: remaining,
+            live,
+        });
+    }
+
+    Ok(batches)
+}
+
+/// `dipper batch list`: discover and print every batch the signer owns, with usage if available.
+pub(crate) async fn list(
+    rpc_url: &str,
+    network: Network,
+    endpoint: &str,
+    signer_args: &SignerArgs,
+) -> Result<()> {
+    let addrs = addrs_for(network);
+    let signer = wallet::load_signer(signer_args)?;
+    let owner = signer.address();
+
+    let provider = read_provider(rpc_url, &addrs).await?;
+    let batches = discover_batches(&provider, &addrs, owner).await?;
+
+    if batches.is_empty() {
+        println!("No batches found for owner {owner:#x}");
+        return Ok(());
+    }
+
+    // Best-effort: open each batch's usage snapshot over the node to report
+    // utilization. A node that is unreachable simply omits the usage column.
+    let usage_source = crate::rpc::chunk_client(endpoint)
+        .await
+        .ok()
+        .map(crate::usage::ChunkClientSource::new);
+
+    println!("Batches owned by {owner:#x}:");
+    for b in &batches {
+        let status = if b.live { "live" } else { "expired" };
+        println!(
+            "  {:#x}  depth {:<3} bucket {:<3} {:<9} {:<7} remaining/chunk {} BZZ",
+            b.batch_id,
+            b.depth,
+            b.bucket_depth,
+            if b.immutable { "immutable" } else { "mutable" },
+            status,
+            format_bzz(b.remaining_per_chunk),
+        );
+
+        if let Some(source) = &usage_source {
+            let batch = nectar_postage::Batch::new(
+                b.batch_id,
+                0,
+                0,
+                b.owner,
+                b.depth,
+                b.bucket_depth,
+                b.immutable,
+            );
+            match crate::usage::open_snapshot(source, &batch).await {
+                Ok(snapshot) => {
+                    let used = snapshot.table().max_count();
+                    println!(
+                        "      usage: sequence {}, peak bucket fill {}",
+                        snapshot.sequence(),
+                        used,
+                    );
+                }
+                Err(_) => {
+                    println!("      usage: (no published snapshot)");
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
