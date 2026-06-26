@@ -41,6 +41,8 @@ anyhow = "1"
 thiserror = "2"
 hex = "0.4"
 rpassword = "7"
+# Terminal progress bar for file downloads (bytes done/total, rate, ETA).
+indicatif = "0.17"
 
 # nectar crates from crates.io. 0.3.0 is the first release carrying the
 # async-only chunk-store API. The `local-signer` feature pulls in the
