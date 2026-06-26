@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 
+use indicatif::{ProgressBar, ProgressStyle};
 use nectar_mantaray::{MantarayError, PlainManifest, metadata};
 use nectar_primitives::file::{ChunkPutExt, Joiner};
 
@@ -129,6 +130,35 @@ pub(crate) async fn download(
     }
 }
 
+/// Stream `joiner` into `file`, rendering a byte progress bar (bytes done out
+/// of the file's total size, with the live transfer rate and ETA). The bar
+/// only animates on a TTY; piped output is unaffected.
+async fn download_into_with_bar(
+    joiner: Joiner<GrpcStore>,
+    file: std::fs::File,
+    label: &str,
+) -> std::result::Result<(), nectar_primitives::file::FileError> {
+    let bar = ProgressBar::new(joiner.size());
+    bar.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} {msg} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({binary_bytes_per_sec}, {eta})",
+        )
+        .expect("valid progress template")
+        .progress_chars("=> "),
+    );
+    bar.set_message(label.to_owned());
+    let progress = bar.clone();
+    let result = joiner
+        .download_into_with_progress(file, move |written, _total| progress.set_position(written))
+        .await;
+    if result.is_ok() {
+        bar.finish_and_clear();
+    } else {
+        bar.abandon();
+    }
+    result
+}
+
 /// Download a single manifest path to a file.
 async fn download_one(
     store: &GrpcStore,
@@ -157,8 +187,7 @@ async fn download_one(
         .await
         .with_context(|| format!("failed to reconstruct {path}"))?;
     let size = joiner.size();
-    joiner
-        .download_into(file)
+    download_into_with_bar(joiner, file, path)
         .await
         .with_context(|| format!("failed to reconstruct {path}"))?;
     eprintln!("Wrote {size} bytes to {}", dest.display());
@@ -207,8 +236,7 @@ async fn download_tree(
         let joiner = Joiner::new(store.clone(), *addr)
             .await
             .with_context(|| format!("failed to reconstruct {rel}"))?;
-        joiner
-            .download_into(file)
+        download_into_with_bar(joiner, file, rel)
             .await
             .with_context(|| format!("failed to reconstruct {rel}"))?;
         count += 1;
@@ -239,8 +267,7 @@ async fn download_raw_file(
         .await
         .context("root is neither a manifest nor a valid file reference")?;
     let size = joiner.size();
-    joiner
-        .download_into(file)
+    download_into_with_bar(joiner, file, root_hex)
         .await
         .context("root is neither a manifest nor a valid file reference")?;
     eprintln!("Wrote {size} bytes to {}", dest.display());
