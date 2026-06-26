@@ -1,14 +1,10 @@
 //! Mantaray manifest pipeline: upload, download, and list (phase 3).
 //!
 //! All three route through the [`crate::store::GrpcStore`], which implements
-//! nectar's `SyncChunkGet`/`SyncChunkPut`. `upload` splits each input file into
+//! nectar's async `ChunkGet`/`ChunkPut`. `upload` splits each input file into
 //! the store (stamp+upload per chunk) and builds a `PlainManifest` whose nodes
 //! upload through the same path; `download`/`ls` open the manifest read-only and
-//! reconstruct files via `sync_join`.
-//!
-//! The split / manifest work is CPU-bound (BMT hashing, trie serialization) and
-//! drives blocking gRPC from the store's sync trait methods, so it runs inside
-//! `tokio::task::spawn_blocking` off the async workers.
+//! reconstruct files via the async [`Joiner`].
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -17,12 +13,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 
 use nectar_mantaray::{MantarayError, PlainManifest, metadata};
-use nectar_primitives::file::{SyncChunkPutExt, sync_join};
+use nectar_primitives::file::{ChunkPutExt, Joiner};
 
 use crate::chunkops;
 use crate::cli::SignerArgs;
 use crate::rpc;
-use crate::store::{BS, GrpcStore};
+use crate::store::GrpcStore;
 use crate::wallet;
 
 /// One file to be added to a manifest: its normalized manifest path, content
@@ -59,9 +55,8 @@ pub(crate) async fn upload(
         bail!("no files to upload at {path}");
     }
 
-    let handle = tokio::runtime::Handle::current();
     let client = rpc::chunk_client(endpoint).await?;
-    let store = GrpcStore::new(client, batch, depth, bucket_depth, signer, handle, false);
+    let store = GrpcStore::new(client, batch, depth, bucket_depth, signer, false);
 
     // A directory / archive defaults to serving `index.html`; an explicit flag
     // always wins. A single file gets no index document unless asked.
@@ -72,42 +67,40 @@ pub(crate) async fn upload(
     };
     let error_doc = error_document.map(str::to_owned);
 
-    // Split, manifest, and save off the async workers: the splitter and trie
-    // serialization are CPU-bound and call blocking gRPC under the hood.
-    let root = tokio::task::spawn_blocking(move || -> Result<nectar_primitives::ChunkAddress> {
-        let mut manifest: PlainManifest<GrpcStore> = PlainManifest::new(store.clone());
+    let mut manifest: PlainManifest<GrpcStore> = PlainManifest::new(store.clone());
 
-        for file in &files {
-            // Split this file into the store: every leaf and intermediate node
-            // is stamped + uploaded as it is produced.
-            let file_root = store
-                .write_file(&file.data)
-                .with_context(|| format!("failed to split {}", file.path))?;
+    for file in &files {
+        // Split this file into the store: every leaf and intermediate node is
+        // stamped + uploaded as it is produced.
+        let file_root = store
+            .write_file(file.data.clone())
+            .await
+            .with_context(|| format!("failed to split {}", file.path))?;
 
-            let meta: BTreeMap<String, String> =
-                BTreeMap::from([(metadata::CONTENT_TYPE.to_owned(), file.content_type.clone())]);
-            manifest
-                .add_with_metadata(&file.path, file_root, meta)
-                .with_context(|| format!("failed to add {} to manifest", file.path))?;
-        }
+        let meta: BTreeMap<String, String> =
+            BTreeMap::from([(metadata::CONTENT_TYPE.to_owned(), file.content_type.clone())]);
+        manifest
+            .add_with_metadata(&file.path, file_root, meta)
+            .await
+            .with_context(|| format!("failed to add {} to manifest", file.path))?;
+    }
 
-        // Website index/error documents live on the root-path node metadata and
-        // must be set before the final save.
-        if let Some(name) = &index_doc {
-            manifest
-                .set_index_document(name)
-                .context("failed to set index document")?;
-        }
-        if let Some(name) = &error_doc {
-            manifest
-                .set_error_document(name)
-                .context("failed to set error document")?;
-        }
+    // Website index/error documents live on the root-path node metadata and
+    // must be set before the final save.
+    if let Some(name) = &index_doc {
+        manifest
+            .set_index_document(name)
+            .await
+            .context("failed to set index document")?;
+    }
+    if let Some(name) = &error_doc {
+        manifest
+            .set_error_document(name)
+            .await
+            .context("failed to set error document")?;
+    }
 
-        manifest.save().context("failed to save manifest")
-    })
-    .await
-    .context("upload task panicked")??;
+    let root = manifest.save().await.context("failed to save manifest")?;
 
     println!("0x{}", hex::encode(root.as_bytes()));
     Ok(())
@@ -122,31 +115,22 @@ pub(crate) async fn download(
     out: Option<&str>,
 ) -> Result<()> {
     let root_addr = chunkops::parse_address(root)?;
-    let path = path.map(str::to_owned);
-    let out = out.map(str::to_owned);
 
-    let handle = tokio::runtime::Handle::current();
     let client = rpc::chunk_client(endpoint).await?;
     // Reads do not stamp, but the store still needs a signer-shaped stamper;
     // synthesize a throwaway key (never used on the read path).
     let signer = alloy_signer_local::PrivateKeySigner::random();
-    let store = GrpcStore::connect_read_only(client, signer, handle);
+    let store = GrpcStore::connect_read_only(client, signer);
 
     let root_hex = hex::encode(root_addr.as_bytes());
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        path.as_deref().map_or_else(
-            || download_tree(&store, root_addr, &root_hex, out.as_deref()),
-            |p| download_one(&store, root_addr, p, out.as_deref()),
-        )
-    })
-    .await
-    .context("download task panicked")??;
-
-    Ok(())
+    match path {
+        Some(p) => download_one(&store, root_addr, p, out).await,
+        None => download_tree(&store, root_addr, &root_hex, out).await,
+    }
 }
 
 /// Download a single manifest path to a file.
-fn download_one(
+async fn download_one(
     store: &GrpcStore,
     root: nectar_primitives::ChunkAddress,
     path: &str,
@@ -154,7 +138,7 @@ fn download_one(
 ) -> Result<()> {
     let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
 
-    let entry = manifest.lookup(path).map_err(|e| match e {
+    let entry = manifest.lookup(path).await.map_err(|e| match e {
         MantarayError::NoForkFound { .. } => anyhow!("path not found: {path}"),
         MantarayError::NotValueType => {
             anyhow!("{path} is a directory; omit <path> to download the tree")
@@ -165,19 +149,25 @@ fn download_one(
         .address()
         .ok_or_else(|| anyhow!("path {path} has no file reference"))?;
 
-    let bytes = sync_join::<_, _, BS>(store.clone(), *file_ref)
-        .with_context(|| format!("failed to reconstruct {path}"))?;
-
     // --out is a file target; default to the path's basename in cwd.
     let dest: PathBuf = out.map_or_else(|| PathBuf::from(basename(path)), PathBuf::from);
-    std::fs::write(&dest, &bytes).with_context(|| format!("failed to write {}", dest.display()))?;
-    eprintln!("Wrote {} bytes to {}", bytes.len(), dest.display());
+    let file = std::fs::File::create(&dest)
+        .with_context(|| format!("failed to create {}", dest.display()))?;
+    let joiner = Joiner::new(store.clone(), *file_ref)
+        .await
+        .with_context(|| format!("failed to reconstruct {path}"))?;
+    let size = joiner.size();
+    joiner
+        .download_into(file)
+        .await
+        .with_context(|| format!("failed to reconstruct {path}"))?;
+    eprintln!("Wrote {size} bytes to {}", dest.display());
     Ok(())
 }
 
 /// Download the whole manifest tree under `out` (a directory). Falls back to
 /// treating `root` as a raw file reference when it is not a manifest.
-fn download_tree(
+async fn download_tree(
     store: &GrpcStore,
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
@@ -186,12 +176,12 @@ fn download_tree(
     let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
 
     // Eagerly collect entries so the manifest's `&mut` borrow is released before
-    // we sync_join (which needs the store independently). A mantaray decode
-    // error here means `root` is a raw file, not a manifest.
-    let entries = match manifest.entries() {
+    // we stream each file (which needs the store independently). A mantaray
+    // decode error here means `root` is a raw file, not a manifest.
+    let entries = match manifest.entries().await {
         Ok(entries) => entries,
         Err(_) => {
-            return download_raw_file(store, root, root_hex, out);
+            return download_raw_file(store, root, root_hex, out).await;
         }
     };
 
@@ -212,10 +202,15 @@ fn download_tree(
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        let bytes = sync_join::<_, _, BS>(store.clone(), *addr)
+        let file = std::fs::File::create(&dest)
+            .with_context(|| format!("failed to create {}", dest.display()))?;
+        let joiner = Joiner::new(store.clone(), *addr)
+            .await
             .with_context(|| format!("failed to reconstruct {rel}"))?;
-        std::fs::write(&dest, &bytes)
-            .with_context(|| format!("failed to write {}", dest.display()))?;
+        joiner
+            .download_into(file)
+            .await
+            .with_context(|| format!("failed to reconstruct {rel}"))?;
         count += 1;
     }
 
@@ -224,15 +219,12 @@ fn download_tree(
 }
 
 /// Treat `root` as a single uploaded file (not a manifest) and write it out.
-fn download_raw_file(
+async fn download_raw_file(
     store: &GrpcStore,
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
     out: Option<&str>,
 ) -> Result<()> {
-    let bytes = sync_join::<_, _, BS>(store.clone(), root)
-        .context("root is neither a manifest nor a valid file reference")?;
-
     let dest: PathBuf = out.map_or_else(
         || PathBuf::from(root_hex),
         |o| {
@@ -241,8 +233,17 @@ fn download_raw_file(
             if p.is_dir() { p.join(root_hex) } else { p }
         },
     );
-    std::fs::write(&dest, &bytes).with_context(|| format!("failed to write {}", dest.display()))?;
-    eprintln!("Wrote {} bytes to {}", bytes.len(), dest.display());
+    let file = std::fs::File::create(&dest)
+        .with_context(|| format!("failed to create {}", dest.display()))?;
+    let joiner = Joiner::new(store.clone(), root)
+        .await
+        .context("root is neither a manifest nor a valid file reference")?;
+    let size = joiner.size();
+    joiner
+        .download_into(file)
+        .await
+        .context("root is neither a manifest nor a valid file reference")?;
+    eprintln!("Wrote {size} bytes to {}", dest.display());
     Ok(())
 }
 
@@ -251,38 +252,34 @@ fn download_raw_file(
 pub(crate) async fn ls(endpoint: &str, root: &str, long: bool) -> Result<()> {
     let root_addr = chunkops::parse_address(root)?;
 
-    let handle = tokio::runtime::Handle::current();
     let client = rpc::chunk_client(endpoint).await?;
     let signer = alloy_signer_local::PrivateKeySigner::random();
-    let store = GrpcStore::connect_read_only(client, signer, handle);
+    let store = GrpcStore::connect_read_only(client, signer);
 
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root_addr, store.clone());
+    let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root_addr, store.clone());
 
-        for entry in manifest.iter() {
-            let entry = entry.context("failed to read manifest entry")?;
-            let path = entry.path_str().unwrap_or("<non-utf8>");
-            let ctype = entry.content_type().unwrap_or("");
-            let addr_hex = entry
-                .address()
-                .map_or_else(String::new, |a| hex::encode(a.as_bytes()));
+    let mut iter = manifest.iter();
+    while let Some(entry) = iter.next().await {
+        let entry = entry.context("failed to read manifest entry")?;
+        let path = entry.path_str().unwrap_or("<non-utf8>");
+        let ctype = entry.content_type().unwrap_or("");
+        let addr_hex = entry
+            .address()
+            .map_or_else(String::new, |a| hex::encode(a.as_bytes()));
 
-            if long {
-                // The manifest stores no size; pay one extra RPC to read the
-                // file root chunk's span (total file length in bytes).
-                use nectar_primitives::store::SyncChunkGet;
-                let size = entry
-                    .address()
-                    .map_or(0, |addr| store.get(addr).map(|c| c.span()).unwrap_or(0));
-                println!("{size:>12}  0x{addr_hex}  {ctype:<24}  {path}");
-            } else {
-                println!("0x{addr_hex}  {ctype:<24}  {path}");
-            }
+        if long {
+            // The manifest stores no size; pay one extra RPC to read the file
+            // root chunk's span (total file length in bytes).
+            use nectar_primitives::store::ChunkGet;
+            let size = match entry.address() {
+                Some(addr) => store.get(addr).await.map(|c| c.span()).unwrap_or(0),
+                None => 0,
+            };
+            println!("{size:>12}  0x{addr_hex}  {ctype:<24}  {path}");
+        } else {
+            println!("0x{addr_hex}  {ctype:<24}  {path}");
         }
-        Ok(())
-    })
-    .await
-    .context("ls task panicked")??;
+    }
 
     Ok(())
 }

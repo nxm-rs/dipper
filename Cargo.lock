@@ -2762,9 +2762,9 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
 name = "nectar-contracts"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eda0308e454f71c7349e039aca5e3657947d971c2d0bce77d090c42d785a6588"
+checksum = "0e5077531d4b84dba2014e8c3cbf6bcafb6f6f0fd55e9467d72241eb72db5a31"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -2773,13 +2773,14 @@ dependencies = [
 
 [[package]]
 name = "nectar-mantaray"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45b79b0462dfd53da1aedac064c0abff4579f5226885d6ccc24f5b99625b6577"
+checksum = "75c174d7ac3b6d10553ddec6b76d3d27ebbeeb51b1584218c5e50ce0debd3751"
 dependencies = [
  "alloy-primitives",
  "bitflags",
  "bytes",
+ "futures",
  "nectar-primitives",
  "rand 0.10.1",
  "serde_json",
@@ -2788,9 +2789,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-postage"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc43dc3955c81031185d40d15ba6c421db8292f5942733b9464bdbac78e17bf9"
+checksum = "af24f6d250c971698fec2b653460f0a6ec07a8a8c0091905392937240f73b5d7"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2804,9 +2805,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-postage-issuer"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3decbd25c452ab3df4740160655b5b37a7aa2448c29153a604e4bb6c25726ded"
+checksum = "a55ff4403c4def299ea8a6f45ed1ea2bff5ebfad4a1cfa42c52c97ccda3e4302"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2818,9 +2819,9 @@ dependencies = [
 
 [[package]]
 name = "nectar-primitives"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a95af57daaa42eed425fd993b104f18d9bcb0942677af2afed79f7ba980b4682"
+checksum = "0669be4db188635ff0a773886c6b4d4f935c1b57de01c2fddb2f31f5054c36a7"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -3270,9 +3271,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "aws-lc-rs",
  "bytes",
