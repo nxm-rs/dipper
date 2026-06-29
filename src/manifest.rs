@@ -22,6 +22,11 @@ use crate::rpc;
 use crate::store::GrpcStore;
 use crate::wallet;
 
+/// Chunk retrievals the joiner keeps in flight while reconstructing a file. The
+/// joiner's default width leaves the node's download pipeline mostly idle; this
+/// matches the node's own retrieval concurrency so the in-flight pool stays full.
+const DOWNLOAD_CONCURRENCY: usize = 96;
+
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
 struct InputFile {
@@ -185,7 +190,8 @@ async fn download_one(
         .with_context(|| format!("failed to create {}", dest.display()))?;
     let joiner = Joiner::new(store.clone(), *file_ref)
         .await
-        .with_context(|| format!("failed to reconstruct {path}"))?;
+        .with_context(|| format!("failed to reconstruct {path}"))?
+        .with_concurrency(DOWNLOAD_CONCURRENCY);
     let size = joiner.size();
     download_into_with_bar(joiner, file, path)
         .await
@@ -235,7 +241,8 @@ async fn download_tree(
             .with_context(|| format!("failed to create {}", dest.display()))?;
         let joiner = Joiner::new(store.clone(), *addr)
             .await
-            .with_context(|| format!("failed to reconstruct {rel}"))?;
+            .with_context(|| format!("failed to reconstruct {rel}"))?
+            .with_concurrency(DOWNLOAD_CONCURRENCY);
         download_into_with_bar(joiner, file, rel)
             .await
             .with_context(|| format!("failed to reconstruct {rel}"))?;
@@ -265,7 +272,8 @@ async fn download_raw_file(
         .with_context(|| format!("failed to create {}", dest.display()))?;
     let joiner = Joiner::new(store.clone(), root)
         .await
-        .context("root is neither a manifest nor a valid file reference")?;
+        .context("root is neither a manifest nor a valid file reference")?
+        .with_concurrency(DOWNLOAD_CONCURRENCY);
     let size = joiner.size();
     download_into_with_bar(joiner, file, root_hex)
         .await
