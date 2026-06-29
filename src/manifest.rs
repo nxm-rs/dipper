@@ -18,9 +18,14 @@ use nectar_primitives::file::{ChunkPutExt, Joiner};
 
 use crate::chunkops;
 use crate::cli::SignerArgs;
+use crate::retry::RetryingStore;
 use crate::rpc;
 use crate::store::GrpcStore;
 use crate::wallet;
+
+/// Store used by every download path: the gRPC store wrapped so a transient
+/// per-chunk retrieval failure retries instead of aborting the whole file.
+type DownloadStore = RetryingStore<GrpcStore>;
 
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
@@ -121,7 +126,7 @@ pub(crate) async fn download(
     // Reads do not stamp, but the store still needs a signer-shaped stamper;
     // synthesize a throwaway key (never used on the read path).
     let signer = alloy_signer_local::PrivateKeySigner::random();
-    let store = GrpcStore::connect_read_only(client, signer);
+    let store = RetryingStore::new(GrpcStore::connect_read_only(client, signer));
 
     let root_hex = hex::encode(root_addr.as_bytes());
     match path {
@@ -134,7 +139,7 @@ pub(crate) async fn download(
 /// of the file's total size, with the live transfer rate and ETA). The bar
 /// only animates on a TTY; piped output is unaffected.
 async fn download_into_with_bar(
-    joiner: Joiner<GrpcStore>,
+    joiner: Joiner<DownloadStore>,
     file: std::fs::File,
     label: &str,
 ) -> std::result::Result<(), nectar_primitives::file::FileError> {
@@ -161,12 +166,12 @@ async fn download_into_with_bar(
 
 /// Download a single manifest path to a file.
 async fn download_one(
-    store: &GrpcStore,
+    store: &DownloadStore,
     root: nectar_primitives::ChunkAddress,
     path: &str,
     out: Option<&str>,
 ) -> Result<()> {
-    let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
+    let mut manifest: PlainManifest<DownloadStore> = PlainManifest::open(root, store.clone());
 
     let entry = manifest.lookup(path).await.map_err(|e| match e {
         MantarayError::NoForkFound { .. } => anyhow!("path not found: {path}"),
@@ -197,12 +202,12 @@ async fn download_one(
 /// Download the whole manifest tree under `out` (a directory). Falls back to
 /// treating `root` as a raw file reference when it is not a manifest.
 async fn download_tree(
-    store: &GrpcStore,
+    store: &DownloadStore,
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
     out: Option<&str>,
 ) -> Result<()> {
-    let mut manifest: PlainManifest<GrpcStore> = PlainManifest::open(root, store.clone());
+    let mut manifest: PlainManifest<DownloadStore> = PlainManifest::open(root, store.clone());
 
     // Eagerly collect entries so the manifest's `&mut` borrow is released before
     // we stream each file (which needs the store independently). A mantaray
@@ -248,7 +253,7 @@ async fn download_tree(
 
 /// Treat `root` as a single uploaded file (not a manifest) and write it out.
 async fn download_raw_file(
-    store: &GrpcStore,
+    store: &DownloadStore,
     root: nectar_primitives::ChunkAddress,
     root_hex: &str,
     out: Option<&str>,

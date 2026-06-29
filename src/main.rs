@@ -11,6 +11,7 @@ mod cli;
 mod commands;
 mod manifest;
 mod proto;
+mod retry;
 mod rpc;
 mod store;
 mod wallet;

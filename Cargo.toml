@@ -34,7 +34,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 tonic = "0.12"
 prost = "0.13"
 anyhow = "1"
@@ -78,6 +78,10 @@ walkdir = "2"
 tar = "0.4"
 flate2 = "1"
 mime_guess = "2"
+
+[dev-dependencies]
+# Paused-clock test harness so the retry-backoff tests advance time instantly.
+tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
 
 [build-dependencies]
 tonic-build = "0.12"
