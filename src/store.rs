@@ -8,6 +8,7 @@
 //! tracks per-bucket indices monotonically) and uploads it; `get` retrieves the
 //! wire body and reconstructs + verifies a `ContentChunk`.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use alloy_signer_local::PrivateKeySigner;
@@ -61,7 +62,17 @@ pub(crate) struct GrpcStoreInner {
     pub(crate) stamper: Mutex<BatchStamper<MemoryIssuer, PrivateKeySigner>>,
     /// Whether the node should re-validate stamps before forwarding.
     pub(crate) validate: bool,
+    /// Bounded cache of retrieved chunks. A download reads the root twice (the
+    /// manifest probe, then the file join), so without this the root and any
+    /// shared upper-tree node costs a redundant `RetrieveChunk` round trip.
+    /// Inserts stop at [`GET_CACHE_CAP`], so the early upper-tree reads are
+    /// deduped while a large download's streamed leaves never grow it.
+    cache: Mutex<HashMap<ChunkAddress, AnyChunk<BS>>>,
 }
+
+/// Upper bound on the retrieval cache: enough for the manifest probe and the
+/// upper file-tree nodes, small enough that the streamed leaves never grow it.
+const GET_CACHE_CAP: usize = 512;
 
 /// gRPC-backed chunk store. `Clone` is cheap (shares one [`GrpcStoreInner`]).
 #[derive(Clone)]
@@ -87,6 +98,7 @@ impl GrpcStore {
                 chunk_client,
                 stamper: Mutex::new(stamper),
                 validate,
+                cache: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -114,6 +126,14 @@ impl ChunkGet<BS> for GrpcStore {
     type Error = GrpcStoreError;
 
     async fn get(&self, address: &ChunkAddress) -> Result<AnyChunk<BS>, Self::Error> {
+        // Serve a cached upper-tree node without a round trip. The guard is
+        // dropped before any await so the returned future stays `Send`.
+        if let Ok(cache) = self.inner.cache.lock()
+            && let Some(chunk) = cache.get(address)
+        {
+            return Ok(chunk.clone());
+        }
+
         let mut client = self.inner.chunk_client.clone();
 
         let resp = client
@@ -142,6 +162,15 @@ impl ChunkGet<BS> for GrpcStore {
 
         // Reject tampered data: the BMT address must match what we asked for.
         chunk.verify(address)?;
+
+        // Populate while below the cap; the cap keeps the streamed leaves from
+        // growing this past the upper tree.
+        if let Ok(mut cache) = self.inner.cache.lock()
+            && cache.len() < GET_CACHE_CAP
+        {
+            cache.insert(*address, chunk.clone());
+        }
+
         Ok(chunk)
     }
 }
@@ -215,5 +244,49 @@ pub(crate) struct TokioSleeper;
 impl Sleeper for TokioSleeper {
     fn sleep(&self, dur: std::time::Duration) -> impl std::future::Future<Output = ()> {
         tokio::time::sleep(dur)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A lazy channel never dials, so any `get` that reaches the RPC fails fast.
+    fn unconnected_store() -> GrpcStore {
+        let channel = Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        let client = ChunkClient::new(channel);
+        GrpcStore::connect_read_only(client, PrivateKeySigner::random())
+    }
+
+    #[tokio::test]
+    async fn get_serves_a_cached_chunk_without_an_rpc() {
+        let store = unconnected_store();
+        let chunk: AnyChunk<BS> = ContentChunk::<BS>::new("a cached upper-tree node")
+            .expect("build content chunk")
+            .into();
+        let address = *chunk.address();
+
+        store
+            .inner
+            .cache
+            .lock()
+            .expect("cache lock")
+            .insert(address, chunk.clone());
+
+        // A hit must return the cached chunk; the unconnected channel would
+        // error if `get` fell through to the RPC.
+        let got = store.get(&address).await.expect("cache hit");
+        assert_eq!(got.address(), &address);
+    }
+
+    #[tokio::test]
+    async fn get_without_a_cache_entry_hits_the_network() {
+        let store = unconnected_store();
+        let address = ChunkAddress::from([7u8; 32]);
+
+        // No cache entry, so `get` must dial; the lazy channel cannot, so this
+        // surfaces a transport error rather than silently succeeding.
+        let err = store.get(&address).await.expect_err("must reach the RPC");
+        assert!(matches!(err, GrpcStoreError::Transport(_)));
     }
 }
