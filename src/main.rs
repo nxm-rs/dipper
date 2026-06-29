@@ -14,6 +14,7 @@ mod proto;
 mod retry;
 mod rpc;
 mod store;
+mod streaming;
 mod wallet;
 
 use anyhow::{Context, Result};
