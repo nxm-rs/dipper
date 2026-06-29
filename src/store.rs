@@ -18,7 +18,8 @@ use nectar_primitives::{
 };
 
 use crate::proto::chunk::{
-    ChunkType, HasChunkRequest, RetrieveChunkRequest, UploadChunkRequest, chunk_client::ChunkClient,
+    ChunkType, HasChunkRequest, RetrieveChunkRequest, UploadChunkRequest,
+    chunk_client::ChunkClient, retrieve_chunk_response, upload_chunk_response,
 };
 use tonic::transport::Channel;
 
@@ -113,22 +114,29 @@ impl ChunkGet<BS> for GrpcStore {
     type Error = GrpcStoreError;
 
     async fn get(&self, address: &ChunkAddress) -> Result<AnyChunk<BS>, Self::Error> {
-        let address_hex = hex::encode(address.as_bytes());
         let mut client = self.inner.chunk_client.clone();
 
         let resp = client
             .retrieve_chunk(RetrieveChunkRequest {
-                address: address_hex,
+                address: address.as_bytes().to_vec(),
             })
             .await?
             .into_inner();
 
-        if resp.data.is_empty() {
+        let data = match resp.result {
+            Some(retrieve_chunk_response::Result::Chunk(c)) => c.data,
+            Some(retrieve_chunk_response::Result::Error(e)) => {
+                return Err(GrpcStoreError::NotFound(e.message));
+            }
+            None => return Err(GrpcStoreError::NotFound(hex::encode(address.as_bytes()))),
+        };
+
+        if data.is_empty() {
             return Err(GrpcStoreError::NotFound(hex::encode(address.as_bytes())));
         }
 
         // The wire body (span || payload) is exactly what ContentChunk consumes.
-        let bytes = nectar_primitives::bytes::Bytes::from(resp.data);
+        let bytes = nectar_primitives::bytes::Bytes::from(data);
         let chunk = ContentChunk::<BS>::try_from(bytes)?;
         let chunk: AnyChunk<BS> = chunk.into();
 
@@ -163,26 +171,29 @@ impl ChunkPut<BS> for GrpcStore {
         let request = UploadChunkRequest {
             data: body,
             stamp: stamp.to_bytes().to_vec(),
-            address: hex::encode(address.as_bytes()),
+            address: address.as_bytes().to_vec(),
             chunk_type: ChunkType::Content as i32,
             validate: self.inner.validate,
         };
 
         let mut client = self.inner.chunk_client.clone();
-        client.upload_chunk(request).await?;
-        Ok(())
+        let resp = client.upload_chunk(request).await?.into_inner();
+        match resp.result {
+            Some(upload_chunk_response::Result::Receipt(_)) => Ok(()),
+            Some(upload_chunk_response::Result::Error(e)) => Err(GrpcStoreError::Stamp(e.message)),
+            None => Err(GrpcStoreError::Stamp("upload returned no result".into())),
+        }
     }
 }
 
 impl ChunkHas<BS> for GrpcStore {
     async fn has(&self, address: &ChunkAddress) -> bool {
-        let address_hex = hex::encode(address.as_bytes());
         let mut client = self.inner.chunk_client.clone();
 
         // `has` has no error channel; log and swallow transport failures.
         match client
             .has_chunk(HasChunkRequest {
-                address: address_hex,
+                address: address.as_bytes().to_vec(),
             })
             .await
         {

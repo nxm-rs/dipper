@@ -7,7 +7,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::chunkops::{self, prepare_content_chunk};
 use crate::cli::SignerArgs;
-use crate::proto::chunk::{ChunkType, RetrieveChunkRequest, UploadChunkRequest};
+use crate::proto::chunk::{
+    ChunkType, RetrieveChunkRequest, UploadChunkRequest, retrieve_chunk_response,
+    upload_chunk_response,
+};
 use crate::rpc;
 use crate::wallet;
 
@@ -26,15 +29,23 @@ pub(crate) async fn download(
 
     let resp = client
         .retrieve_chunk(RetrieveChunkRequest {
-            address: chunkops::address_hex(&address),
+            address: address.as_bytes().to_vec(),
         })
         .await?
         .into_inner();
 
+    let data = match resp.result {
+        Some(retrieve_chunk_response::Result::Chunk(c)) => c.data,
+        Some(retrieve_chunk_response::Result::Error(e)) => {
+            bail!("chunk retrieval failed: {}", e.message);
+        }
+        None => bail!("chunk retrieval returned no result"),
+    };
+
     let bytes: &[u8] = if raw {
-        &resp.data
+        &data
     } else {
-        chunkops::payload_of(&resp.data)
+        chunkops::payload_of(&data)
     };
 
     match out {
@@ -75,16 +86,24 @@ pub(crate) async fn upload(
         .upload_chunk(UploadChunkRequest {
             data: prepared.body,
             stamp: prepared.stamp,
-            address: address_hex.clone(),
+            address: prepared.address.as_bytes().to_vec(),
             chunk_type: ChunkType::Content as i32,
             validate: false,
         })
         .await?
         .into_inner();
 
+    let receipt = match resp.result {
+        Some(upload_chunk_response::Result::Receipt(r)) => r,
+        Some(upload_chunk_response::Result::Error(e)) => {
+            bail!("chunk upload failed: {}", e.message);
+        }
+        None => bail!("chunk upload returned no result"),
+    };
+
     println!("Uploaded chunk 0x{address_hex}");
-    println!("Accepted by storer: 0x{}", resp.storer);
-    println!("Storage radius:     {}", resp.storage_radius);
+    println!("Accepted by storer: 0x{}", hex::encode(&receipt.storer));
+    println!("Storage radius:     {}", receipt.storage_radius);
     Ok(())
 }
 
