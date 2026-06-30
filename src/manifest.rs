@@ -28,6 +28,23 @@ use crate::wallet;
 /// per-chunk retrieval failure retries instead of aborting the whole file.
 type DownloadStore = RetryingStore<StreamingChunkGet>;
 
+/// Chunk addresses the joiner keeps in flight while reconstructing a file. The
+/// node serves retrievals across its whole connected peer set, so the joiner
+/// must offer far more than its small default width or the node's pipeline sits
+/// idle and the download is starved at the client. A single-node mainnet sweep
+/// put the useful-throughput knee at width 128; beyond that the node's
+/// peer-bounded serve pipeline is saturated and extra in-flight gets only queue.
+/// `DIPPER_DL_CONCURRENCY` overrides it for tuning against a given node.
+const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 128;
+
+fn download_concurrency() -> usize {
+    std::env::var("DIPPER_DL_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_DOWNLOAD_CONCURRENCY)
+}
+
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
 struct InputFile {
@@ -143,6 +160,7 @@ async fn download_into_with_bar(
     file: std::fs::File,
     label: &str,
 ) -> std::result::Result<(), nectar_primitives::file::FileError> {
+    let joiner = joiner.with_concurrency(download_concurrency());
     let bar = ProgressBar::new(joiner.size());
     bar.set_style(
         ProgressStyle::with_template(
