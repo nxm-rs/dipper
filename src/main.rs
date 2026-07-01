@@ -13,6 +13,7 @@ mod manifest;
 mod proto;
 mod rpc;
 mod store;
+mod streaming;
 mod wallet;
 
 use anyhow::{Context, Result};

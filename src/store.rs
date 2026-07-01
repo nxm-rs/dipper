@@ -48,6 +48,13 @@ pub(crate) enum GrpcStoreError {
     /// The requested chunk was not found on the network.
     #[error("chunk not found: {0}")]
     NotFound(String),
+
+    /// The shared `RetrieveChunks` stream broke (transport fault or clean
+    /// close) before the response arrived. Distinct from a per-address miss so
+    /// the caller re-issues onto a freshly re-opened stream rather than treating
+    /// the whole file as unavailable.
+    #[error("retrieve stream reset")]
+    StreamReset,
 }
 
 /// Shared inner state behind an [`Arc`] so [`GrpcStore`] is cheaply `Clone`

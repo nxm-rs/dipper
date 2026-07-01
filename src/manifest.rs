@@ -21,11 +21,14 @@ use crate::chunkops;
 use crate::cli::SignerArgs;
 use crate::rpc;
 use crate::store::{GrpcStore, TokioSleeper};
+use crate::streaming::StreamingChunkGet;
 use crate::wallet;
 
-/// Store used by every download path: the gRPC store wrapped so a transient
-/// per-chunk retrieval failure retries instead of aborting the whole file.
-type DownloadStore = RetryingChunkGet<GrpcStore, TokioSleeper>;
+/// Store used by every download path. One shared, re-openable `RetrieveChunks`
+/// bidi stream multiplexes every concurrent get, and the retry decorator sits on
+/// top so a transient per-chunk miss (or a stream reset) retries instead of
+/// aborting the whole file.
+type DownloadStore = RetryingChunkGet<StreamingChunkGet, TokioSleeper>;
 
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
@@ -123,11 +126,10 @@ pub(crate) async fn download(
     let root_addr = chunkops::parse_address(root)?;
 
     let client = rpc::chunk_client(endpoint).await?;
-    // Reads do not stamp, but the store still needs a signer-shaped stamper;
-    // synthesize a throwaway key (never used on the read path).
-    let signer = alloy_signer_local::PrivateKeySigner::random();
-    let store =
-        RetryingChunkGet::with_default(GrpcStore::connect_read_only(client, signer), TokioSleeper);
+    // One shared RetrieveChunks bidi stream multiplexes every concurrent get;
+    // the retry decorator sits on top so a transient miss or stream reset still
+    // retries. Retrieval never stamps, so no signer is needed here.
+    let store = RetryingChunkGet::with_default(StreamingChunkGet::new(client), TokioSleeper);
 
     let root_hex = hex::encode(root_addr.as_bytes());
     match path {
