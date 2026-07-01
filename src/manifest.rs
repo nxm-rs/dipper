@@ -27,6 +27,25 @@ use crate::wallet;
 /// per-chunk retrieval failure retries instead of aborting the whole file.
 type DownloadStore = RetryingChunkGet<GrpcStore, TokioSleeper>;
 
+/// Chunk addresses the joiner keeps in flight while reconstructing a file.
+///
+/// The node self-bounds its own retrieval fan-out per connected peer, so the
+/// client width only has to keep that server-side prefetch pool full: roughly
+/// four times the node's connected peer count. 128 matches about a 32-peer node
+/// and is a measured single-node throughput knee, a sensible default rather than
+/// a hard invariant. `DIPPER_DL_CONCURRENCY` overrides it for tuning.
+const DEFAULT_DOWNLOAD_CONCURRENCY: usize = 128;
+
+/// Read the joiner download width from `DIPPER_DL_CONCURRENCY`, falling back to
+/// [`DEFAULT_DOWNLOAD_CONCURRENCY`] when unset, unparseable, or zero.
+fn download_concurrency() -> usize {
+    std::env::var("DIPPER_DL_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_DOWNLOAD_CONCURRENCY)
+}
+
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
 struct InputFile {
@@ -144,6 +163,7 @@ async fn download_into_with_bar(
     file: std::fs::File,
     label: &str,
 ) -> std::result::Result<(), nectar_primitives::file::FileError> {
+    let joiner = joiner.with_concurrency(download_concurrency());
     let bar = ProgressBar::new(joiner.size());
     bar.set_style(
         ProgressStyle::with_template(
