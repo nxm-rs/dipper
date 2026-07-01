@@ -34,7 +34,10 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+# Wraps the request `mpsc::Receiver` as the outbound half of the bidi
+# `RetrieveChunks` stream, and adapts the inbound tonic stream for the demux.
+tokio-stream = "0.1"
 tonic = "0.12"
 prost = "0.13"
 anyhow = "1"
