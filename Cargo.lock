@@ -2796,8 +2796,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 [[package]]
 name = "nectar-contracts"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e5077531d4b84dba2014e8c3cbf6bcafb6f6f0fd55e9467d72241eb72db5a31"
+source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -2807,8 +2806,7 @@ dependencies = [
 [[package]]
 name = "nectar-mantaray"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75c174d7ac3b6d10553ddec6b76d3d27ebbeeb51b1584218c5e50ce0debd3751"
+source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
 dependencies = [
  "alloy-primitives",
  "bitflags",
@@ -2823,8 +2821,7 @@ dependencies = [
 [[package]]
 name = "nectar-postage"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af24f6d250c971698fec2b653460f0a6ec07a8a8c0091905392937240f73b5d7"
+source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2839,8 +2836,7 @@ dependencies = [
 [[package]]
 name = "nectar-postage-issuer"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a55ff4403c4def299ea8a6f45ed1ea2bff5ebfad4a1cfa42c52c97ccda3e4302"
+source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2853,8 +2849,7 @@ dependencies = [
 [[package]]
 name = "nectar-primitives"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0669be4db188635ff0a773886c6b4d4f935c1b57de01c2fddb2f31f5054c36a7"
+source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",

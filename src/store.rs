@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use alloy_signer_local::PrivateKeySigner;
 use nectar_postage_issuer::{BatchStamper, MemoryIssuer, Stamper};
 use nectar_primitives::{
-    AnyChunk, ChunkAddress, ContentChunk, DEFAULT_BODY_SIZE,
+    AnyChunk, ChunkAddress, ContentChunk, DEFAULT_BODY_SIZE, Sleeper,
     store::{ChunkGet, ChunkHas, ChunkPut},
 };
 
@@ -203,5 +203,17 @@ impl ChunkHas<BS> for GrpcStore {
                 false
             }
         }
+    }
+}
+
+/// Native [`Sleeper`] for [`nectar_primitives::RetryingChunkGet`]: dipper runs
+/// on tokio, so the injected delay is `tokio::time::sleep`. `Clone` so the
+/// wrapping store stays cheaply cloneable for the joiner.
+#[derive(Clone, Copy)]
+pub(crate) struct TokioSleeper;
+
+impl Sleeper for TokioSleeper {
+    fn sleep(&self, dur: std::time::Duration) -> impl std::future::Future<Output = ()> {
+        tokio::time::sleep(dur)
     }
 }
