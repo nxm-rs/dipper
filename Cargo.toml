@@ -49,15 +49,15 @@ indicatif = "0.17"
 # nectar deps share one rev so their `nectar-primitives` types unify. The
 # `local-signer` feature pulls in the `BatchStamper`/`MemoryIssuer` signing
 # path used for upload.
-nectar-primitives = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
-nectar-postage = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
-nectar-postage-issuer = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf", features = ["local-signer"] }
+nectar-primitives = { git = "https://github.com/nxm-rs/nectar", rev = "304b548284f2f4d8b122ff98fea087743665948d" }
+nectar-postage = { git = "https://github.com/nxm-rs/nectar", rev = "304b548284f2f4d8b122ff98fea087743665948d" }
+nectar-postage-issuer = { git = "https://github.com/nxm-rs/nectar", rev = "304b548284f2f4d8b122ff98fea087743665948d", features = ["local-signer"] }
 # Mantaray manifest (phase 3): plain (non-encrypted) manifests over a chunk
 # store; default features only (no `encryption`).
-nectar-mantaray = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
+nectar-mantaray = { git = "https://github.com/nxm-rs/nectar", rev = "304b548284f2f4d8b122ff98fea087743665948d" }
 # Contract address book + reusable IERC20 interface (phase 2). Its
 # IPostageStamp is read-only, so dipper declares its own write interface.
-nectar-contracts = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
+nectar-contracts = { git = "https://github.com/nxm-rs/nectar", rev = "304b548284f2f4d8b122ff98fea087743665948d" }
 
 # alloy - versions pinned to match nectar's workspace so Signature/Address/B256
 # types unify across nectar's public API. The "keystore" feature on

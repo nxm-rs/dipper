@@ -2796,7 +2796,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 [[package]]
 name = "nectar-contracts"
 version = "0.3.0"
-source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
+source = "git+https://github.com/nxm-rs/nectar?rev=304b548284f2f4d8b122ff98fea087743665948d#304b548284f2f4d8b122ff98fea087743665948d"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -2806,7 +2806,7 @@ dependencies = [
 [[package]]
 name = "nectar-mantaray"
 version = "0.3.0"
-source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
+source = "git+https://github.com/nxm-rs/nectar?rev=304b548284f2f4d8b122ff98fea087743665948d#304b548284f2f4d8b122ff98fea087743665948d"
 dependencies = [
  "alloy-primitives",
  "bitflags",
@@ -2821,7 +2821,7 @@ dependencies = [
 [[package]]
 name = "nectar-postage"
 version = "0.3.0"
-source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
+source = "git+https://github.com/nxm-rs/nectar?rev=304b548284f2f4d8b122ff98fea087743665948d#304b548284f2f4d8b122ff98fea087743665948d"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "nectar-postage-issuer"
 version = "0.3.0"
-source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
+source = "git+https://github.com/nxm-rs/nectar?rev=304b548284f2f4d8b122ff98fea087743665948d#304b548284f2f4d8b122ff98fea087743665948d"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
@@ -2849,7 +2849,7 @@ dependencies = [
 [[package]]
 name = "nectar-primitives"
 version = "0.3.0"
-source = "git+https://github.com/nxm-rs/nectar?rev=5482f472e0d55e6e1cdda90e88cc4002b94f4caf#5482f472e0d55e6e1cdda90e88cc4002b94f4caf"
+source = "git+https://github.com/nxm-rs/nectar?rev=304b548284f2f4d8b122ff98fea087743665948d#304b548284f2f4d8b122ff98fea087743665948d"
 dependencies = [
  "alloy-primitives",
  "alloy-signer",
