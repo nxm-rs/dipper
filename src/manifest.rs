@@ -14,18 +14,18 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use indicatif::{ProgressBar, ProgressStyle};
 use nectar_mantaray::{MantarayError, PlainManifest, metadata};
+use nectar_primitives::RetryingChunkGet;
 use nectar_primitives::file::{ChunkPutExt, Joiner};
 
 use crate::chunkops;
 use crate::cli::SignerArgs;
-use crate::retry::RetryingStore;
 use crate::rpc;
-use crate::store::GrpcStore;
+use crate::store::{GrpcStore, TokioSleeper};
 use crate::wallet;
 
 /// Store used by every download path: the gRPC store wrapped so a transient
 /// per-chunk retrieval failure retries instead of aborting the whole file.
-type DownloadStore = RetryingStore<GrpcStore>;
+type DownloadStore = RetryingChunkGet<GrpcStore, TokioSleeper>;
 
 /// One file to be added to a manifest: its normalized manifest path, content
 /// type, and raw bytes.
@@ -126,7 +126,8 @@ pub(crate) async fn download(
     // Reads do not stamp, but the store still needs a signer-shaped stamper;
     // synthesize a throwaway key (never used on the read path).
     let signer = alloy_signer_local::PrivateKeySigner::random();
-    let store = RetryingStore::new(GrpcStore::connect_read_only(client, signer));
+    let store =
+        RetryingChunkGet::with_default(GrpcStore::connect_read_only(client, signer), TokioSleeper);
 
     let root_hex = hex::encode(root_addr.as_bytes());
     match path {

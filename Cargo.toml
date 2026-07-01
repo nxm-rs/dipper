@@ -44,18 +44,20 @@ rpassword = "7"
 # Terminal progress bar for file downloads (bytes done/total, rate, ETA).
 indicatif = "0.17"
 
-# nectar crates from crates.io. 0.3.0 is the first release carrying the
-# async-only chunk-store API. The `local-signer` feature pulls in the
-# `BatchStamper`/`MemoryIssuer` signing path used for upload.
-nectar-primitives = "0.3.0"
-nectar-postage = "0.3.0"
-nectar-postage-issuer = { version = "0.3.0", features = ["local-signer"] }
+# nectar crates pinned to a git rev carrying the shared `RetryingChunkGet`
+# decorator (the async-only chunk-store API plus the injected `Sleeper`). All
+# nectar deps share one rev so their `nectar-primitives` types unify. The
+# `local-signer` feature pulls in the `BatchStamper`/`MemoryIssuer` signing
+# path used for upload.
+nectar-primitives = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
+nectar-postage = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
+nectar-postage-issuer = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf", features = ["local-signer"] }
 # Mantaray manifest (phase 3): plain (non-encrypted) manifests over a chunk
 # store; default features only (no `encryption`).
-nectar-mantaray = "0.3.0"
+nectar-mantaray = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
 # Contract address book + reusable IERC20 interface (phase 2). Its
 # IPostageStamp is read-only, so dipper declares its own write interface.
-nectar-contracts = "0.3.0"
+nectar-contracts = { git = "https://github.com/nxm-rs/nectar", rev = "5482f472e0d55e6e1cdda90e88cc4002b94f4caf" }
 
 # alloy - versions pinned to match nectar's workspace so Signature/Address/B256
 # types unify across nectar's public API. The "keystore" feature on
@@ -78,10 +80,6 @@ walkdir = "2"
 tar = "0.4"
 flate2 = "1"
 mime_guess = "2"
-
-[dev-dependencies]
-# Paused-clock test harness so the retry-backoff tests advance time instantly.
-tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
 
 [build-dependencies]
 tonic-build = "0.12"
