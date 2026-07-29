@@ -12,7 +12,7 @@ clippy:
     cargo clippy --tests --all-features -- -D warnings -A clippy::unwrap_used -A clippy::expect_used
 
 test:
-    cargo test --all-features
+    cargo nextest run --all-features --no-tests=warn
 
 check:
     cargo check --all-features

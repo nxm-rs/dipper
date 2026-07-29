@@ -42,6 +42,10 @@
             cargo-release
             git-cliff
             git
+            # Search / test tooling (nix develop + the Claude hooks).
+            cargo-nextest
+            ripgrep
+            ast-grep
           ];
 
           OPENSSL_DIR = "${pkgs.openssl.dev}";

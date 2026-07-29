@@ -59,8 +59,11 @@ jobs:
       - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2
+        with:
+          tool: nextest
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo nextest run --all-features --no-tests=warn
 
   doc:
     name: doc
