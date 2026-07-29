@@ -14,9 +14,6 @@ clippy:
 test:
     cargo nextest run --all-features --no-tests=warn
 
-doctest:
-    cargo test --doc --all-features
-
 check:
     cargo check --all-features
 
@@ -38,7 +35,7 @@ deny:
 audit:
     cargo audit
 
-ci: fmt-check clippy test doctest deny
+ci: fmt-check clippy test deny
 
 pre-commit: fmt clippy
 

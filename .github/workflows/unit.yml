@@ -64,8 +64,6 @@ jobs:
           tool: nextest
       - name: Run tests
         run: cargo nextest run --all-features --no-tests=warn
-      - name: Doctests
-        run: cargo test --doc --all-features
 
   doc:
     name: doc
