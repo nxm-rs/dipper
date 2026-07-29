@@ -12,7 +12,10 @@ clippy:
     cargo clippy --tests --all-features -- -D warnings -A clippy::unwrap_used -A clippy::expect_used
 
 test:
-    cargo test --all-features
+    cargo nextest run --all-features
+
+doctest:
+    cargo test --doc --all-features
 
 check:
     cargo check --all-features
@@ -35,7 +38,7 @@ deny:
 audit:
     cargo audit
 
-ci: fmt-check clippy test deny
+ci: fmt-check clippy test doctest deny
 
 pre-commit: fmt clippy
 

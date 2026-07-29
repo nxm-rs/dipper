@@ -9,8 +9,13 @@ target/
 # Editors
 .zed/
 
-# Agent / local worktrees (created under these paths; never tracked)
-.claude/
+# Agent / local worktrees and session state (never tracked)
+# Track shared Claude config (hooks + team settings); ignore personal + session state.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/settings.local.json
+.claude/worktrees/
 .worktrees/
 
 # Workflow scratch directories

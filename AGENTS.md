@@ -15,8 +15,10 @@ Phase 3 (planned): mantaray manifests and multi-chunk file upload/download.
 - Edition `2024`, MSRV `1.92`. Do not raise MSRV without bumping `Cargo.toml` in the same commit.
 - `cargo`/`rustc` and `protoc` come from the dev shell. Enter it with `nix develop` (this repo's `flake.nix`) or, when working inside the umbrella swarm checkout, `nix develop /code/nxm/swarm`.
 - `protoc` is required: `build.rs` drives `tonic-build` to generate the gRPC clients from the vendored protos under `proto/`.
-- `just ci` runs the full gate: `fmt-check`, `clippy -D warnings`, `test`, `deny`.
+- `just ci` runs the full gate: `fmt-check`, `clippy -D warnings`, `test` (nextest), `doctest`, `deny`.
 - `cargo fmt --all` formats. `cargo clippy --all-targets -- -D warnings` lints. Both are required pre-commit, zero tolerance for warning-bearing pushes.
+- Tests run under `cargo nextest run` (`just test`); doctests via `cargo test --doc` (`just doctest`), since nextest cannot run doctests.
+- Claude hooks (`.claude/`): `rustfmt` on every `.rs` edit, and `cargo nextest run` on touched crates when a turn ends. Both no-op outside the dev shell.
 - Offline smoke test: `cargo run -- wallet address --private-key 0x...` derives an address without touching the network.
 
 ## Layout
@@ -33,8 +35,8 @@ Primitives (chunks, BMT, addressing, mantaray, postage) live in `nectar`, never 
 
 ## House rules
 
-- **No em-dashes.** ASCII hyphens or split the sentence. Source, rustdoc, markdown, commits, PR bodies, chat output.
-- **No Claude / AI attribution in commit messages or PR bodies.** No "Co-Authored-By: Claude", no robot footer.
+- **No em-dashes** in source, rustdoc, or markdown; `.claude/hooks/content-lint.sh` blocks any edit that introduces one. Keep commit messages, PR bodies, and chat em-dash-free too: use ASCII hyphens or split the sentence.
+- **Disclose AI assistance** (nxm-rs org policy): add an honest `AI Assistance: <tool> used for <what>` line to PR bodies and commit messages. Never the `Co-Authored-By: Claude Code` or `Generated with Claude Code` boilerplate footer.
 - **Conventional Commits**, imperative mood. Scope by area: `feat(chunk): ...`, `fix(wallet): ...`, `chore(deps): ...`.
 - PR bodies are markdown: one logical line per paragraph, no hard-wrapping. Let GitHub reflow.
 - After every `git push`, run `gh pr checks <N>` and watch CI until green. `MERGEABLE` is not the success signal.
