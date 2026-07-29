@@ -63,7 +63,7 @@ jobs:
         with:
           tool: nextest
       - name: Run tests
-        run: cargo nextest run --all-features
+        run: cargo nextest run --all-features --no-tests=warn
       - name: Doctests
         run: cargo test --doc --all-features
 
